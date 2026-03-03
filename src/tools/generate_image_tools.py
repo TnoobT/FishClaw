@@ -2,7 +2,7 @@
 Author: tfj
 Date: 2026-03-03 22:06:15
 LastEditors: tfj
-LastEditTime: 2026-03-03 22:27:43
+LastEditTime: 2026-03-03 23:27:59
 Description: 
 Version: Alpha
 '''
@@ -97,7 +97,7 @@ class GenerateImageTools(Toolkit):
             resp = requests.get(image_url, timeout=60)
             resp.raise_for_status()
         except requests.exceptions.RequestException as e:
-            log_warning(f"[DashScopeImageTools] 图像下载失败: {e}")
+            log_warning(f"[GenerateImageTools] 图像下载失败: {e}")
             return f"error: 图像下载失败 - {e}"
 
         # 从 Content-Type 推断扩展名，默认 .png
@@ -110,7 +110,7 @@ class GenerateImageTools(Toolkit):
         with open(local_path, "wb") as f:
             f.write(resp.content)
 
-        log_info(f"[DashScopeImageTools] 图像已缓存到本地: {local_path}")
+        log_info(f"[GenerateImageTools] 图像已缓存到本地: {local_path}")
         return local_path
 
     def generate_image(
@@ -153,7 +153,7 @@ class GenerateImageTools(Toolkit):
             },
         }
 
-        log_info(f"[DashScopeImageTools] 请求生图，模型={self.model}，尺寸={image_size}")
+        log_info(f"[GenerateImageTools] 请求生图，模型={self.model}，尺寸={image_size}")
 
         try:
             response = requests.post(
@@ -164,19 +164,19 @@ class GenerateImageTools(Toolkit):
             )
             response.raise_for_status()
         except requests.exceptions.Timeout:
-            log_warning("[DashScopeImageTools] 请求超时")
+            log_warning("[GenerateImageTools] 请求超时")
             return "error: 请求超时，请稍后重试"
         except requests.exceptions.HTTPError as e:
-            log_warning(f"[DashScopeImageTools] HTTP 错误: {e}")
+            log_warning(f"[GenerateImageTools] HTTP 错误: {e}")
             return f"error: HTTP 错误 {response.status_code} - {response.text}"
         except requests.exceptions.RequestException as e:
-            log_warning(f"[DashScopeImageTools] 网络请求错误: {e}")
+            log_warning(f"[GenerateImageTools] 网络请求错误: {e}")
             return f"error: 网络请求错误 - {e}"
 
         try:
             result = response.json()
         except ValueError:
-            log_warning("[DashScopeImageTools] 响应体无法解析为 JSON")
+            log_warning("[GenerateImageTools] 响应体无法解析为 JSON")
             return f"error: 响应解析失败 - {response.text}"
 
         # 提取图像 URL
@@ -194,7 +194,7 @@ class GenerateImageTools(Toolkit):
                         image_url = item["image"]
                         if not image_url:  # API 返回 image 字段但值为空时跳过
                             continue
-                        log_info(f"[DashScopeImageTools] 生图成功，准备下载缓存: {image_url}")
+                        log_info(f"[GenerateImageTools] 生图成功，准备下载缓存: {image_url}")
                         return self._download_image(image_url)
 
             # 尝试备用结构 results[0].url
@@ -202,13 +202,13 @@ class GenerateImageTools(Toolkit):
             if results:
                 image_url = results[0].get("url") or ""
                 if image_url:
-                    log_info(f"[DashScopeImageTools] 生图成功，准备下载缓存: {image_url}")
+                    log_info(f"[GenerateImageTools] 生图成功，准备下载缓存: {image_url}")
                     return self._download_image(image_url)
 
             # 未能提取到 URL，返回完整响应供调试
-            log_warning(f"[DashScopeImageTools] 未能从响应中提取图像 URL: {result}")
+            log_warning(f"[GenerateImageTools] 未能从响应中提取图像 URL: {result}")
             return f"error: 未能提取图像 URL，完整响应: {json.dumps(result, ensure_ascii=False)}"
 
         except (KeyError, IndexError, TypeError) as e:
-            log_warning(f"[DashScopeImageTools] 解析响应结构时出错: {e}")
+            log_warning(f"[GenerateImageTools] 解析响应结构时出错: {e}")
             return f"error: 解析响应失败 - {e}，完整响应: {json.dumps(result, ensure_ascii=False)}"

@@ -1145,14 +1145,7 @@ class FishClawTools(Toolkit):
     @tool(requires_confirmation=True)
     def post_item(self) -> str:
         """
-        对当前浏览器发布页面进行截图，等待人工确认后点击发布按钮。
-
-        请先调用 fill_item_info 填写好商品信息，再调用本工具。
-        本工具会：
-          1. 截图当前页面，保存到 .cache/screenshot 目录
-          2. 暂停等待人工确认（确认截图内容无误后方可继续）
-          3. 确认后点击「发布」按钮并检测发布结果
-
+        调用post_item工具发布商品(帖子)。
         Returns:
             str: 发布结果描述。
         """
