@@ -1,0 +1,17 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# 环境配置（含真实密钥，不提交版本控制）
+.env
+xianyu_cookies.json
+
+
+.cache
