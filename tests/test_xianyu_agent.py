@@ -1,3 +1,11 @@
+'''
+Author: tfj
+Date: 2026-03-03 21:49:34
+LastEditors: tfj
+LastEditTime: 2026-03-03 23:07:43
+Description: 
+Version: Alpha
+'''
 """
 闲鱼登录工具 Agent 测试
 运行方式：在项目根目录执行
@@ -18,6 +26,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from agno.agent import Agent
 from agno.db.sqlite import SqliteDb
 from src.tools.xianyu_tools import FishClawTools
+from src.tools.generate_image_tools import GenerateImageTools
 from src.models.config import MODEL
 # ──────────────────────────────────────────────────────────
 # 配置区（按需修改）
@@ -37,18 +46,21 @@ xianyu_tools = FishClawTools(
     headless=False,   # 必须有头，方便人工处理滑块验证码
     enable_post_item=True,
 )
+generate_image_tools = GenerateImageTools()
+
 
 agent = Agent(
     name="闲鱼助手",
     description=(
         "你是一个闲鱼账号助手。"
         "你的职责是：登录闲鱼账号并发布商品。"
-        "你拥有以下工具：check_login_status、login_with_qrcode、post_item。"
+        "如果要发布商品，你需要先调用generate_image_tools生成图片，注意调用这个工具的提示词你要润色一下"
+        "然后调用fill_item_info填写商品信息，最后调用post_item发布商品。"
         "请做与闲鱼相关的事情之前要检查登录状态，如果未登录则先扫码登录，以下是流程：\n"
         "1. 先调用 check_login_status 检查是否已登录，如果已登录则任务完成。\n"
         "2. 如果未登录，调用 login_with_qrcode 扫码登录。\n"
     ),
-    tools=[xianyu_tools],
+    tools=[xianyu_tools,generate_image_tools],
     model=MODEL,
     markdown=True,
     db=SqliteDb(db_file=".cache/tmp/xianyu_agent.db"),

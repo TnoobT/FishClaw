@@ -10,15 +10,16 @@ import random
 import tempfile
 import time
 import urllib.request
+from datetime import datetime
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from dotenv import load_dotenv
 
 # 加载项目根目录下的 .env 文件
 load_dotenv()
 
-from agno.tools import Toolkit
+from agno.tools import Toolkit, tool
 from agno.utils.log import log_info, log_warning
 
 try:
@@ -107,6 +108,9 @@ class FishClawTools(Toolkit):
         self._context: Optional[BrowserContext] = None
         self._page: Optional[Page] = None
 
+        
+        #TODO: send_sms_code 、login_with_sms 有问题，滑块问题待解决
+
         tools: List[Any] = []
         if enable_login:
             tools.extend([
@@ -114,7 +118,10 @@ class FishClawTools(Toolkit):
                 self.login_with_qrcode,
             ])
         if enable_post_item:
-            tools.append(self.post_item)
+            tools.extend([
+                self.fill_item_info,
+                self.post_item,
+            ])
         # 预留：后续实现
         # if enable_comment:
         #     tools.append(self.comment_item)
@@ -720,330 +727,463 @@ class FishClawTools(Toolkit):
     # 工具方法 5：发布闲置商品
     # ══════════════════════════════════════════════════════
 
-    def post_item(
-        self,
-        image: str,
-        description: str,
-        category: str = "其他技能服务",
-        price: float = 100.0,
-    ) -> str:
-        """
-        在闲鱼（咸鱼）发布一件闲置商品。
+    # ══════════════════════════════════════════════════════
+    # post_item 内部步骤方法
+    # ══════════════════════════════════════════════════════
 
-        Args:
-            image (str): 宝贝图片，支持两种格式：
-                - 本地文件路径（如 'C:/pics/shirt.jpg'）
-                - 网络图片 URL（如 'https://example.com/pic.jpg'，会先下载到临时目录）
-            description (str): 宝贝描述文字。
-            category (str): 分类名称，默认「其他技能服务」。
-            price (float): 商品售价（元），默认 100.0。
+    def _post_step_prepare_image(self, image: str) -> Tuple[bool, str, Optional[str]]:
+        """
+        Step 1：处理图片路径，URL 则下载到临时文件。
 
         Returns:
-            str: 操作结果描述。
+            (success, local_image_path_or_error_msg, tmp_file_path)
         """
-        _tmp_file = None  # 用于记录下载的临时文件，函数结束时清理
-        try:
-            page = self._get_page()
-
-            # ── Step 0：确保已登录（加载 Cookies）──
-            self._load_cookies()
-            log_info("FishClaw [post_item]: 正在访问闲鱼首页...")
-            page.goto(XIANYU_HOME_URL, wait_until="domcontentloaded", timeout=30000)
-            _random_delay(1.5, 2.5)
-
-            # ── Step 1：处理图片路径（URL → 下载到临时文件）──
-            image = image.strip()
-            if image.startswith("http://") or image.startswith("https://"):
-                log_info(f"FishClaw [post_item]: 下载图片 {image[:80]}...")
+        image = image.strip()
+        if image.startswith("http://") or image.startswith("https://"):
+            log_info(f"FishClaw [post_item] Step1: 下载图片 {image[:80]}...")
+            try:
                 suffix = Path(image.split("?")[0]).suffix or ".jpg"
-                fd, _tmp_file = tempfile.mkstemp(suffix=suffix)
+                fd, tmp_file = tempfile.mkstemp(suffix=suffix)
                 os.close(fd)
-                urllib.request.urlretrieve(image, _tmp_file)
-                local_image_path = str(Path(_tmp_file).resolve())
-                log_info(f"FishClaw [post_item]: 图片已下载到 {local_image_path}")
-            else:
-                local_image_path = str(Path(image).resolve())
-                if not Path(local_image_path).exists():
-                    return f"图片文件不存在：{local_image_path}"
+                urllib.request.urlretrieve(image, tmp_file)
+                local_path = str(Path(tmp_file).resolve())
+                log_info(f"FishClaw [post_item] Step1: 图片已下载到 {local_path}")
+                return True, local_path, tmp_file
+            except Exception as e:
+                return False, f"下载图片失败：{e}", None
+        else:
+            local_path = str(Path(image).resolve())
+            if not Path(local_path).exists():
+                return False, f"图片文件不存在：{local_path}", None
+            return True, local_path, None
 
-            # ── Step 2：点击侧边栏「发闲置」──
-            # 注意：点击后闲鱼会打开一个新标签页作为发布页面，需用 expect_page() 捕获
-            publish_sidebar_selector = 'div.sidebar-item-text-container--KNEB4FFf'
-            publish_text_selectors = [
-                publish_sidebar_selector,
-                'div[data-spm-anchor-id*="sidebar"] :text("发闲置")',
-                ':text("发闲置")',
-            ]
-            clicked_publish_entry = False
-            publish_page = None
-            for sel in publish_text_selectors:
+    def _post_step_navigate_to_publish(self, page: Any) -> Tuple[bool, str, Optional[Any]]:
+        """
+        Step 2：点击侧边栏「发闲置」，捕获新标签页。
+
+        Returns:
+            (success, message, publish_page)
+        """
+        publish_text_selectors = [
+            'div.sidebar-item-text-container--KNEB4FFf',
+            'div[data-spm-anchor-id*="sidebar"] :text("发闲置")',
+            ':text("发闲置")',
+        ]
+        for sel in publish_text_selectors:
+            try:
+                el = page.locator(sel).first
+                if not el.is_visible(timeout=3000):
+                    continue
+                _random_delay(0.5, 1.0)
+                with self._context.expect_page(timeout=8000) as new_page_info:
+                    el.click()
+                publish_page = new_page_info.value
+                publish_page.wait_for_load_state("networkidle", timeout=15000)
+                log_info(f"FishClaw [post_item] Step2: 已点击「发闲置」，新标签页 URL={publish_page.url}")
+                return True, f"已进入发布页面：{publish_page.url[:80]}", publish_page
+            except Exception as e:
+                log_warning(f"FishClaw [post_item] Step2: 点击「发闲置」失败（{sel}）: {e}")
+                continue
+        return False, "未能找到「发闲置」按钮，请确认已登录，或页面结构已更新。", None
+
+    def _post_step_upload_image(self, page: Any, local_image_path: str) -> Tuple[bool, str]:
+        """
+        Step 3：上传宝贝图片。
+
+        Returns:
+            (success, message)
+        """
+        all_frames = [page.main_frame] + [f for f in page.frames if f != page.main_frame]
+        log_info(f"FishClaw [post_item] Step3: 当前 URL={page.url}，共 {len(all_frames)} 个 frame")
+        for frame in all_frames:
+            try:
+                count = frame.evaluate("() => document.querySelectorAll('input[type=\"file\"]').length")
+                log_info(f"  frame {frame.url[:80]} → file inputs: {count}")
+            except Exception:
+                log_info(f"  frame {frame.url[:80]} → 无法访问")
+
+        # 3a：set_input_files 方案（优先）
+        file_input_css_list = [
+            'input[name="file"][type="file"]',
+            'input[type="file"][accept*="image"]',
+            'input[type="file"]',
+        ]
+        for frame in all_frames:
+            for css in file_input_css_list:
                 try:
-                    el = page.locator(sel).first
-                    if not el.is_visible(timeout=3000):
+                    el = frame.query_selector(css)
+                    if el is None:
                         continue
+                    el.set_input_files(local_image_path)
+                    log_info(f"FishClaw [post_item] Step3: 已通过 set_input_files 上传图片（css={css}）")
+                    _random_delay(2.0, 4.0)
+                    return True, f"图片已上传（set_input_files，css={css}）"
+                except Exception as e:
+                    log_warning(f"FishClaw [post_item] Step3: set_input_files 失败（{css}）: {e}")
+                    continue
+
+        # 3b：file_chooser 方案（降级）
+        log_warning("FishClaw [post_item] Step3: set_input_files 方案失败，尝试 file_chooser 降级...")
+        upload_trigger_selectors = [
+            ':text("添加首图")',
+            ':text("添加图片")',
+            ':text("上传图片")',
+            'div[class*="addPic"]',
+            'div[class*="add-pic"]',
+            'label[class*="upload"]',
+            'label[class*="Upload"]',
+        ]
+        for sel in upload_trigger_selectors:
+            trigger = self._find_element(page, sel, timeout=2000)
+            if trigger is None:
+                continue
+            try:
+                with page.expect_file_chooser(timeout=5000) as fc_info:
+                    trigger.click()
+                fc_info.value.set_files(local_image_path)
+                log_info(f"FishClaw [post_item] Step3: 图片已通过 file_chooser 上传（{sel}）")
+                _random_delay(2.0, 4.0)
+                return True, f"图片已上传（file_chooser，sel={sel}）"
+            except Exception as e:
+                log_warning(f"FishClaw [post_item] Step3: file_chooser 也失败（{sel}）: {e}")
+                continue
+
+        return False, "未能上传图片。请确认已跳转到发布页面，或手动上传图片后继续。"
+
+    def _post_step_fill_description(self, page: Any, description: str) -> Tuple[bool, str]:
+        """
+        Step 4：填写宝贝描述（致命步骤，失败即停止）。
+
+        Returns:
+            (success, message)
+        """
+        desc_selectors = [
+            'div[contenteditable="true"][class*="editor"]',
+            'div[contenteditable="true"][data-placeholder*="描述"]',
+            'div[contenteditable="true"][data-spm-anchor-id*="publish"]',
+            'div[contenteditable="true"][class*="desc"]',
+            'div[contenteditable="true"][class*="Desc"]',
+            'textarea[placeholder*="描述"]',
+            'textarea',
+        ]
+        for sel in desc_selectors:
+            try:
+                el = page.locator(sel).first
+                if el.is_visible(timeout=3000):
+                    el.click()
+                    _random_delay(0.3, 0.6)
+                    el.click(click_count=3)
+                    _random_delay(0.2, 0.4)
+                    for char in description:
+                        page.keyboard.type(char)
+                        time.sleep(random.uniform(0.03, 0.12))
                     _random_delay(0.5, 1.0)
-                    # 用 expect_page 监听新标签页
-                    with self._context.expect_page(timeout=8000) as new_page_info:
-                        el.click()
-                    publish_page = new_page_info.value
-                    publish_page.wait_for_load_state("networkidle", timeout=15000)
-                    clicked_publish_entry = True
-                    log_info(f"FishClaw [post_item]: 已点击「发闲置」，新标签页 URL={publish_page.url}")
-                    break
-                except Exception as e:
-                    log_warning(f"FishClaw [post_item]: 点击「发闲置」失败（{sel}）: {e}")
-                    continue
+                    log_info(f"FishClaw [fill_item_info] Step4: 已填写宝贝描述（{sel}）")
+                    return True, f"宝贝描述已填写（sel={sel}）"
+            except Exception as e:
+                log_warning(f"FishClaw [fill_item_info] Step4: 填写描述失败（{sel}）: {e}")
+                continue
+        return False, "未能找到描述输入框，发布页面结构可能已变更。"
 
-            if not clicked_publish_entry or publish_page is None:
-                return "未能找到「发闲置」按钮，请确认已登录，或页面结构已更新。"
+    def _post_step_select_category(self, page: Any, categories: List) -> Tuple[bool, str]:
+        """
+        Step 5：选择商品分类（致命步骤，失败即停止）。
 
-            # 后续所有操作使用新标签页
-            page = publish_page
-
-            # ── Step 3：上传宝贝图片 ──
-            uploaded = False
-
-            # 诊断：打印当前所有 frame 及各 frame 内 file input 数量
-            all_frames = [page.main_frame] + [f for f in page.frames if f != page.main_frame]
-            log_info(f"FishClaw [post_item]: 当前 URL={page.url}")
-            log_info(f"FishClaw [post_item]: 共 {len(all_frames)} 个 frame")
-            for frame in all_frames:
-                try:
-                    count = frame.evaluate("() => document.querySelectorAll('input[type=\"file\"]').length")
-                    log_info(f"  frame {frame.url[:80]} → file inputs: {count}")
-                except Exception:
-                    log_info(f"  frame {frame.url[:80]} → 无法访问")
-            page.screenshot(path="debug_step3.png", full_page=True)
-            log_info("FishClaw [post_item]: 已截图 debug_step3.png，可用浏览器打开查看当前页面")
-
-            # ── 3a：直接对隐藏 file input 调用 set_input_files（最优先，最可靠）──
-            # 用 query_selector（立即返回，不轮询）逐 frame 查找
-            file_input_css_list = [
-                'input[name="file"][type="file"]',
-                'input[type="file"][accept*="image"]',
-                'input[type="file"]',
-            ]
-            for frame in all_frames:
-                if uploaded:
-                    break
-                for css in file_input_css_list:
-                    try:
-                        el = frame.query_selector(css)   # 立即返回，找不到返回 None
-                        if el is None:
-                            continue
-                        el.set_input_files(local_image_path)
-                        uploaded = True
-                        log_info(f"FishClaw [post_item]: 已通过 set_input_files 上传图片（frame={frame.url[:60]}, css={css}）")
-                        break
-                    except Exception as e:
-                        log_warning(f"FishClaw [post_item]: set_input_files 失败（{css}）: {e}")
-                        continue
-
-            # ── 3b：file_chooser 方案（降级）——点击可见触发器，Playwright 拦截弹窗 ──
-            if not uploaded:
-                log_warning("FishClaw [post_item]: set_input_files 方案失败，尝试 file_chooser 降级...")
-                upload_trigger_selectors = [
-                    ':text("添加首图")',
-                    ':text("添加图片")',
-                    ':text("上传图片")',
-                    'div[class*="addPic"]',
-                    'div[class*="add-pic"]',
-                    'label[class*="upload"]',
-                    'label[class*="Upload"]',
-                ]
-                for sel in upload_trigger_selectors:
-                    trigger = self._find_element(page, sel, timeout=2000)
-                    if trigger is None:
-                        continue
-                    try:
-                        with page.expect_file_chooser(timeout=5000) as fc_info:
-                            trigger.click()
-                        fc_info.value.set_files(local_image_path)
-                        uploaded = True
-                        log_info(f"FishClaw [post_item]: 图片已通过 file_chooser 上传（{sel}）")
-                        break
-                    except Exception as e:
-                        log_warning(f"FishClaw [post_item]: file_chooser 也失败（{sel}）: {e}")
-                        continue
-
-            if not uploaded:
-                return "未能上传图片。请确认已跳转到发布页面，或手动上传图片后继续。"
-
-            _random_delay(2.0, 4.0)  # 等待图片上传、预览渲染完成
-
-            # ── Step 4：填写宝贝描述 ──
-            desc_selectors = [
-                'div[contenteditable="true"][class*="editor"]',           # 实测：class="editor--MtHPS94K"
-                'div[contenteditable="true"][data-placeholder*="描述"]',  # 按 placeholder 属性定位
-                'div[contenteditable="true"][data-spm-anchor-id*="publish"]',
-                'div[contenteditable="true"][class*="desc"]',
-                'div[contenteditable="true"][class*="Desc"]',
-                'textarea[placeholder*="描述"]',
-                'textarea',
-            ]
-            desc_filled = False
-            for sel in desc_selectors:
-                try:
-                    el = page.locator(sel).first
-                    if el.is_visible(timeout=3000):
-                        el.click()
-                        _random_delay(0.3, 0.6)
-                        el.click(click_count=3)  # 全选已有内容
-                        _random_delay(0.2, 0.4)
-                        for char in description:
-                            page.keyboard.type(char)
-                            time.sleep(random.uniform(0.03, 0.12))
-                        desc_filled = True
-                        log_info(f"FishClaw [post_item]: 已填写宝贝描述（{sel}）")
-                        break
-                except Exception as e:
-                    log_warning(f"FishClaw [post_item]: 填写描述失败（{sel}）: {e}")
-                    continue
-
-            if not desc_filled:
-                log_warning("FishClaw [post_item]: 未能填写宝贝描述，继续后续步骤...")
-
-            _random_delay(0.5, 1.0)
-
-            # ── Step 5：选择分类 ──
-            # 点击分类下拉框，再点击目标分类选项
-            category_selectors = [
-                'div[class*="category"] select',
-                'select[class*="category"]',
-                'div[class*="Category"] select',
-                # 有些是自定义下拉，先点触发器
-                'div[class*="category"][class*="select"]',
-                'div[class*="categorySelect"]',
-                '.ant-select',
-                'span[class*="category"]',
-            ]
-            category_selected = False
+        Returns:
+            (success, message)
+        """
+        category_selectors = [
+            'div[class*="category"] select',
+            'select[class*="category"]',
+            'div[class*="Category"] select',
+            'div[class*="category"][class*="select"]',
+            'div[class*="categorySelect"]',
+            '.ant-select',
+            'span[class*="category"]',
+        ]
+        for category in categories:
             for sel in category_selectors:
                 try:
                     el = page.locator(sel).first
-                    if el.is_visible(timeout=2000):
+                    if el.is_visible(timeout=2000): 
                         el.click()
                         _random_delay(0.5, 1.0)
-                        # 点击选项
-                        option_sel = f'div[class*="option"]:has-text("{category}"), li:has-text("{category}"), option:has-text("{category}")'
+                        option_sel = (
+                            f'div[class*="option"]:has-text("{category}"), '
+                            f'li:has-text("{category}"), '
+                            f'option:has-text("{category}")'
+                        )
                         opt = page.locator(option_sel).first
                         if opt.is_visible(timeout=2000):
                             opt.click()
-                            category_selected = True
-                            log_info(f"FishClaw [post_item]: 已选择分类「{category}」")
-                            break
+                            _random_delay(0.5, 1.0)
+                            log_info(f"FishClaw [fill_item_info] Step5: 已选择分类「{category}」")
+                            return True, f"已选择分类「{category}」"
                 except Exception as e:
-                    log_warning(f"FishClaw [post_item]: 选择分类失败（{sel}）: {e}")
+                    log_warning(f"FishClaw [fill_item_info] Step5: 选择分类失败（{sel}）: {e}")
                     continue
 
-            if not category_selected:
-                log_warning(f"FishClaw [post_item]: 未能选择分类「{category}」，将尝试按文本直接点击...")
-                try:
-                    page.click(f'text={category}', timeout=3000)
-                    category_selected = True
-                    log_info(f"FishClaw [post_item]: 已通过文本点击选择分类「{category}」")
-                except Exception:
-                    log_warning("FishClaw [post_item]: 分类选择失败，继续后续步骤...")
+            return False, f"未能选择分类，发布页面结构可能已变更。"
 
-            _random_delay(0.5, 1.0)
+    def _post_step_fill_price(self, page: Any, price: float) -> Tuple[bool, str]:
+        """
+        Step 6：填写商品价格（致命步骤，失败即停止）。
 
-            # ── Step 6：填写价格 ──
-            price_str = f"{price:.2f}"
-            price_selectors = [
-                'input[placeholder="0.00"]',                    # 实测：价格输入框
-                'input.ant-input[type="text"]',                 # 实测：class="ant-input css-d5i8y5"
-                'input[data-spm-anchor-id*="publish"][type="text"]',
-                'input[placeholder*="价格"]',
-                'input[type="number"]',
-            ]
-            price_filled = False
-            for sel in price_selectors:
-                try:
-                    el = page.locator(sel).first
-                    if el.is_visible(timeout=2000):
-                        el.click()
-                        _random_delay(0.2, 0.5)
-                        el.click(click_count=3)  # 全选
-                        _random_delay(0.1, 0.3)
-                        for char in price_str:
-                            page.keyboard.type(char)
-                            time.sleep(random.uniform(0.05, 0.15))
-                        price_filled = True
-                        log_info(f"FishClaw [post_item]: 已填写价格 {price_str}（{sel}）")
-                        break
-                except Exception as e:
-                    log_warning(f"FishClaw [post_item]: 填写价格失败（{sel}）: {e}")
-                    continue
+        Returns:
+            (success, message)
+        """
+        price_str = f"{price:.2f}"
+        price_selectors = [
+            'input[placeholder="0.00"]',
+            'input.ant-input[type="text"]',
+            'input[data-spm-anchor-id*="publish"][type="text"]',
+            'input[placeholder*="价格"]',
+            'input[type="number"]',
+        ]
+        for sel in price_selectors:
+            try:
+                el = page.locator(sel).first
+                if el.is_visible(timeout=2000):
+                    el.click()
+                    _random_delay(0.2, 0.5)
+                    el.click(click_count=3)
+                    _random_delay(0.1, 0.3)
+                    for char in price_str:
+                        page.keyboard.type(char)
+                        time.sleep(random.uniform(0.05, 0.15))
+                    _random_delay(0.5, 1.2)
+                    log_info(f"FishClaw [fill_item_info] Step6: 已填写价格 {price_str}（{sel}）")
+                    return True, f"价格已填写：¥{price_str}（sel={sel}）"
+            except Exception as e:
+                log_warning(f"FishClaw [fill_item_info] Step6: 填写价格失败（{sel}）: {e}")
+                continue
+        return False, f"未能找到价格输入框，发布页面结构可能已变更。"
 
-            if not price_filled:
-                log_warning("FishClaw [post_item]: 未能填写价格，继续后续步骤...")
+    def _post_step_take_screenshot(self, page: Any) -> Tuple[bool, str]:
+        """
+        Step 7a：在发布前截图，保存到 .cache/screenshot 目录。
 
-            _random_delay(0.5, 1.2)
+        Returns:
+            (success, screenshot_path_or_error_msg)
+        """
+        try:
+            screenshot_dir = Path(".cache") / "screenshot"
+            screenshot_dir.mkdir(parents=True, exist_ok=True)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            screenshot_path = screenshot_dir / f"post_item_{timestamp}.png"
+            page.screenshot(path=str(screenshot_path), full_page=True)
+            log_info(f"FishClaw [post_item] Step7a: 截图已保存到 {screenshot_path}")
+            return True, str(screenshot_path.resolve())
+        except Exception as e:
+            return False, f"截图失败：{e}"
 
-            # ── Step 7：点击「发布」按钮 ──
-            publish_btn_selectors = [
-                'button:has-text("发布")',
-                'span:has-text("发布"):not(:has-text("发布闲置"))',
-                'div[class*="publish-btn"]:has-text("发布")',
-                'div[class*="publishBtn"]:has-text("发布")',
-                'a:has-text("立即发布")',
-                'button:has-text("立即发布")',
-                '[type="submit"]:has-text("发布")',
-            ]
-            published = False
-            for sel in publish_btn_selectors:
-                try:
-                    el = page.locator(sel).first
-                    if el.is_visible(timeout=2000):
-                        _random_delay(0.5, 1.0)
-                        el.click()
-                        published = True
-                        log_info(f"FishClaw [post_item]: 已点击发布按钮（{sel}）")
-                        break
-                except Exception as e:
-                    log_warning(f"FishClaw [post_item]: 点击发布按钮失败（{sel}）: {e}")
-                    continue
+    def _post_step_click_publish(self, page: Any) -> Tuple[bool, str]:
+        """
+        Step 7b：点击「发布」按钮并等待发布结果。
 
-            if not published:
-                return (
-                    "未能找到「发布」按钮，商品信息已填写完毕，"
-                    "请在浏览器窗口中手动点击发布按钮。"
-                )
+        Returns:
+            (success, message)
+        """
+        publish_btn_selectors = [
+            'button:has-text("发布")',
+            'span:has-text("发布"):not(:has-text("发布闲置"))',
+            'div[class*="publish-btn"]:has-text("发布")',
+            'div[class*="publishBtn"]:has-text("发布")',
+            'a:has-text("立即发布")',
+            'button:has-text("立即发布")',
+            '[type="submit"]:has-text("发布")',
+        ]
+        for sel in publish_btn_selectors:
+            try:
+                el = page.locator(sel).first
+                if el.is_visible(timeout=2000):
+                    _random_delay(0.5, 1.0)
+                    el.click()
+                    log_info(f"FishClaw [post_item] Step7b: 已点击发布按钮（{sel}）")
+                    break
+            except Exception as e:
+                log_warning(f"FishClaw [post_item] Step7b: 点击发布按钮失败（{sel}）: {e}")
+                continue
+        else:
+            return False, "未能找到「发布」按钮，商品信息已填写完毕，请在浏览器窗口中手动点击发布按钮。"
 
-            # ── 等待发布完成：检测成功提示或页面跳转 ──
-            _random_delay(2.0, 3.5)
-            success_selectors = [
-                ':text("发布成功")',
-                ':text("成功发布")',
-                '[class*="success"]',
-            ]
-            for sel in success_selectors:
-                try:
-                    el = page.locator(sel).first
-                    if el.is_visible(timeout=4000):
-                        log_info(f"FishClaw [post_item]: 检测到发布成功提示（{sel}）")
-                        return f"商品发布成功！描述：{description[:30]}，价格：¥{price:.2f}"
-                except Exception:
-                    continue
+        # 等待发布完成，检测成功提示或页面跳转
+        _random_delay(2.0, 3.5)
+        success_selectors = [
+            ':text("发布成功")',
+            ':text("成功发布")',
+            '[class*="success"]',
+        ]
+        for sel in success_selectors:
+            try:
+                el = page.locator(sel).first
+                if el.is_visible(timeout=4000):
+                    log_info(f"FishClaw [post_item] Step7b: 检测到发布成功提示（{sel}）")
+                    return True, f"商品发布成功！检测到成功提示：{sel}"
+            except Exception:
+                continue
 
-            # 没检测到成功提示，但也没报错，可能是页面已跳转
-            current_url = page.url
-            current_title = page.title()
+        # 未检测到标准成功提示，以当前页面信息作为结果
+        current_url = page.url
+        current_title = page.title()
+        return True, (
+            f"发布操作已完成（未检测到明确成功提示），"
+            f"当前页面：{current_title}（{current_url[:80]}）"
+        )
+
+    # ══════════════════════════════════════════════════════
+    # 工具方法 5a：填写商品信息
+    # ══════════════════════════════════════════════════════
+
+    def fill_item_info(
+        self,
+        image: str,
+        description: str,
+        price: float = 100.0,
+    ) -> str:
+        """
+        在闲鱼发布页面中填写商品信息（图片、描述、分类、价格）。
+
+        本工具只负责填写信息，不会点击发布按钮。
+        每一步都是致命步骤，任意步骤失败则立即停止并返回失败原因。
+        填写成功后，请调用 post_item 完成截图确认和最终发布。
+
+        Args:
+            image (str): 宝贝图片，支持本地路径或网络 URL。
+            description (str): 宝贝描述文字。
+            price (float): 商品售价（元），默认 100.0。
+
+        Returns:
+            str: 包含所有步骤结果的汇总报告，或第一个失败步骤的错误信息。
+        """
+        step_results: List[Dict[str, Any]] = []
+        _tmp_file: Optional[str] = None
+        categories = ["其他技能服务","其他闲置"]
+
+        def _record(step: str, success: bool, message: str) -> None:
+            step_results.append({"step": step, "success": success, "message": message})
+            log_info(f"FishClaw [fill_item_info] {'OK' if success else 'FAIL'} {step}: {message}")
+
+        def _summary() -> str:
+            lines = ["=== fill_item_info 步骤汇总 ==="]
+            for r in step_results:
+                icon = "✓" if r["success"] else "✗"
+                lines.append(f"  [{icon}] {r['step']}: {r['message']}")
+            return "\n".join(lines)
+
+        try:
+            page = self._get_page()
+
+            # ── Step 0：加载 Cookies，访问首页 ──
+            self._load_cookies()
+            log_info("FishClaw [fill_item_info] Step0: 正在访问闲鱼首页...")
+            page.goto(XIANYU_HOME_URL, wait_until="domcontentloaded", timeout=30000)
+            _random_delay(1.5, 2.5)
+            _record("Step0-加载首页", True, f"已访问 {XIANYU_HOME_URL}")
+
+            # ── Step 1：处理图片路径 ──
+            ok, img_result, _tmp_file = self._post_step_prepare_image(image)
+            _record("Step1-处理图片", ok, img_result)
+            if not ok:
+                return f"填写失败（Step1）：{img_result}\n\n{_summary()}"
+            local_image_path = img_result
+
+            # ── Step 2：进入发布页 ──
+            ok, msg, publish_page = self._post_step_navigate_to_publish(page)
+            _record("Step2-进入发布页", ok, msg)
+            if not ok:
+                return f"填写失败（Step2）：{msg}\n\n{_summary()}"
+            page = publish_page
+
+            # ── Step 3：上传图片 ──
+            ok, msg = self._post_step_upload_image(page, local_image_path)
+            _record("Step3-上传图片", ok, msg)
+            if not ok:
+                return f"填写失败（Step3）：{msg}\n\n{_summary()}"
+
+            # ── Step 4：填写描述（致命）──
+            ok, msg = self._post_step_fill_description(page, description)
+            _record("Step4-填写描述", ok, msg)
+            if not ok:
+                return f"填写失败（Step4）：{msg}\n\n{_summary()}"
+
+            # ── Step 5：选择分类（致命）──
+            ok, msg = self._post_step_select_category(page, categories)
+            _record("Step5-选择分类", ok, msg)
+            if not ok:
+                return f"填写失败（Step5）：{msg}\n\n{_summary()}"
+
+            # ── Step 6：填写价格（致命）──
+            ok, msg = self._post_step_fill_price(page, price)
+            _record("Step6-填写价格", ok, msg)
+            if not ok:
+                return f"填写失败（Step6）：{msg}\n\n{_summary()}"
+
+            # ── Step 7：截图 ──
+            ok, screenshot_result = self._post_step_take_screenshot(page)
+            _record("Step7-截图", ok, screenshot_result)
+
             return (
-                f"发布操作已完成，请确认商品是否发布成功。"
-                f"当前页面：{current_title}（{current_url[:80]}）"
+                f"商品信息填写成功！"
+                f"请调用 post_item 查看截图并确认后完成发布"
             )
 
         except Exception as e:
-            return f"发布商品时出错：{e}"
+            return f"填写商品信息时出错：{e}\n\n{_summary()}"
         finally:
-            # 清理临时下载的图片文件
             if _tmp_file and Path(_tmp_file).exists():
                 try:
                     os.remove(_tmp_file)
-                    log_info(f"FishClaw [post_item]: 已清理临时图片文件 {_tmp_file}")
+                    log_info(f"FishClaw [fill_item_info]: 已清理临时图片文件 {_tmp_file}")
                 except Exception:
                     pass
+
+    # ══════════════════════════════════════════════════════
+    # 工具方法 5b：截图确认并发布商品
+    # ══════════════════════════════════════════════════════
+
+    @tool(requires_confirmation=True)
+    def post_item(self) -> str:
+        """
+        对当前浏览器发布页面进行截图，等待人工确认后点击发布按钮。
+
+        请先调用 fill_item_info 填写好商品信息，再调用本工具。
+        本工具会：
+          1. 截图当前页面，保存到 .cache/screenshot 目录
+          2. 暂停等待人工确认（确认截图内容无误后方可继续）
+          3. 确认后点击「发布」按钮并检测发布结果
+
+        Returns:
+            str: 发布结果描述。
+        """
+        step_results: List[Dict[str, Any]] = []
+
+        def _record(step: str, success: bool, message: str) -> None:
+            step_results.append({"step": step, "success": success, "message": message})
+            log_info(f"FishClaw [post_item] {'OK' if success else 'FAIL'} {step}: {message}")
+
+        def _summary() -> str:
+            lines = ["=== post_item 步骤汇总 ==="]
+            for r in step_results:
+                icon = "✓" if r["success"] else "✗"
+                lines.append(f"  [{icon}] {r['step']}: {r['message']}")
+            return "\n".join(lines)
+
+        try:
+            page = self._get_page()
+            # requires_confirmation=True：Agent 框架在此暂停，
+            # 用户查看截图并 confirm 后，框架才继续执行后续代码。
+
+            # ── Step 2：点击发布按钮 ──
+            ok, msg = self._post_step_click_publish(page)
+            _record("Step2-点击发布", ok, msg)
+            if not ok:
+                return f"发布失败（Step2）：{msg}\n\n{_summary()}"
+
+            return f"商品发布成功！\n\n{_summary()}"
+
+        except Exception as e:
+            return f"发布时出错：{e}\n\n{_summary()}"
 
     # ══════════════════════════════════════════════════════
     # 预留：评论商品（后续实现）

@@ -1,3 +1,11 @@
+'''
+Author: tfj
+Date: 2026-03-03 21:49:34
+LastEditors: tfj
+LastEditTime: 2026-03-03 22:53:56
+Description: 
+Version: Alpha
+'''
 """
 直接调用 FishClawTools.post_item 的测试脚本（不使用 Agent）
 运行方式：在项目根目录下执行
@@ -17,7 +25,7 @@ from src.tools.xianyu_tools import FishClawTools
 COOKIES_PATH = os.path.join(os.path.dirname(__file__), "..", ".cache", "cookies", "xianyu_cookies.json")
 
 # 测试图片路径（相对于项目根目录的 tmp/test.png）
-IMAGE_PATH = os.path.join(os.path.dirname(__file__), "..", ".cache", "tmp/cache_img", "216AFF77-C402-47f4-B458-92024AD636E7.png")
+IMAGE_PATH = os.path.join(os.path.dirname(__file__), "..", ".cache", "cache_img", "test.png")
 
 # 宝贝描述
 DESCRIPTION = "aigc 虚拟服务，全新未拆封，支持7天无理由退换。"
@@ -59,7 +67,7 @@ def main():
             print("\n❌ 登录失败，请检查上方错误信息，流程终止。")
             return
 
-    print("\n✅ 已登录，开始发布商品...")
+    print("\n✅ 已登录，开始填写商品信息...")
 
     # ── Step 2：检查图片文件是否存在 ─────────────────────
     abs_image = os.path.abspath(IMAGE_PATH)
@@ -69,24 +77,39 @@ def main():
         return
     print("  ✅ 图片文件存在")
 
-    # ── Step 3：发布商品 ──────────────────────────────────
-    print(f"\n[Step 3] 正在发布商品...")
+    # ── Step 3：填写商品信息 ──────────────────────────────────
+    print(f"\n[Step 3] 正在填写商品信息...")
     print(f"  图片  ：{abs_image}")
     print(f"  描述  ：{DESCRIPTION}")
     print(f"  分类  ：{CATEGORY}")
     print(f"  价格  ：¥{PRICE:.2f}")
 
-    result = tools.post_item(
+    fill_result = tools.fill_item_info(
         image=abs_image,
         description=DESCRIPTION,
-        category=CATEGORY,
         price=PRICE,
     )
-    print(f"\n  结果：{result}")
+    print(f"\n  填写结果：{fill_result}")
 
-    if "成功" in result:
+    if "成功" not in fill_result:
+        print("\n❌ 填写商品信息失败，请查看上方错误信息。")
+        return
+
+    print("\n" + "=" * 55)
+    print("  [Step 4] 请打开 .cache/screenshot 目录查看截图，")
+    print("  确认商品信息填写无误后按 Enter 继续发布；")
+    print("  若有问题请按 Ctrl+C 取消。")
+    print("=" * 55)
+    input("\n  >> 按 Enter 确认并发布...")
+
+    # ── Step 4：截图确认后发布商品 ───────────────────────
+    print(f"\n[Step 4] 正在发布商品...")
+    post_result = tools.post_item()
+    print(f"\n  发布结果：{post_result}")
+
+    if "成功" in post_result:
         print("\n✅ 商品发布成功！")
-    elif "出错" in result or "失败" in result:
+    elif "出错" in post_result or "失败" in post_result:
         print("\n❌ 发布失败，请查看上方错误信息。")
     else:
         print("\n⚠️  发布操作已执行，请在浏览器中确认结果。")
