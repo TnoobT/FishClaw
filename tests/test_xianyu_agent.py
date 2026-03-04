@@ -59,12 +59,14 @@ agent = Agent(
         "请做与闲鱼相关的事情之前要检查登录状态，如果未登录则先扫码登录，以下是流程：\n"
         "1. 先调用 check_login_status 检查是否已登录，如果已登录则任务完成。\n"
         "2. 如果未登录，调用 login_with_qrcode 扫码登录。\n"
+        "注意不要一次性调用多个工具，你要根据上一轮的反馈结果决定下一步操作。"
     ),
     tools=[xianyu_tools,generate_image_tools],
     model=MODEL,
     markdown=True,
     db=SqliteDb(db_file=".cache/tmp/xianyu_agent.db"),
     add_history_to_context=True,
+    num_history_runs=100
 )
 
 # ──────────────────────────────────────────────────────────
@@ -78,5 +80,44 @@ if __name__ == "__main__":
     print("=" * 60)
     print()
 
-    # 使用 cli 交互模式，Agent 可以多轮对话向用户索要验证码
-    agent.cli_app()
+    # 自定义 CLI 循环，正确处理 requires_confirmation=True 的暂停流程
+    while True:
+        try:
+            user_input = input("You: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\n退出。")
+            break
+
+        if not user_input:
+            continue
+        if user_input.lower() in ("exit", "quit", "bye"):
+            print("再见！")
+            break
+
+        run_response = agent.run(user_input)
+
+        # 处理暂停确认（requires_confirmation=True）
+        while run_response is not None and run_response.is_paused:
+            for requirement in run_response.active_requirements:
+                if requirement.needs_confirmation:
+                    print(
+                        f"\n[确认] 工具 '{requirement.tool_execution.tool_name}'"
+                        f" 参数 {requirement.tool_execution.tool_args} 需要您的确认。"
+                    )
+                    choice = input("是否继续执行？(y/n，默认 y): ").strip().lower()
+                    if choice == "n":
+                        requirement.reject()
+                        print("已取消。")
+                    else:
+                        requirement.confirm()
+
+            run_response = agent.continue_run(
+                run_id=run_response.run_id,
+                requirements=run_response.requirements,
+            )
+
+        if run_response is not None:
+            # 打印 Agent 回复
+            content = run_response.get_content_as_string()
+            if content:
+                print(f"\nAgent: {content}\n")

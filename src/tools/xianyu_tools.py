@@ -260,8 +260,6 @@ class FishClawTools(Toolkit):
         """
         检查当前闲鱼账号是否已登录。
 
-        使用 Playwright 访问闲鱼首页，通过 URL 跳转和页面元素判断登录状态。
-
         Returns:
             str: 登录状态描述。已登录返回页面信息，未登录返回提示。
         """
@@ -885,45 +883,124 @@ class FishClawTools(Toolkit):
                 continue
         return False, "未能找到描述输入框，发布页面结构可能已变更。"
 
-    def _post_step_select_category(self, page: Any, categories: List) -> Tuple[bool, str]:
+    def _post_step_append_description(self, page: Any, description: str) -> Tuple[bool, str]:
         """
-        Step 5：选择商品分类（致命步骤，失败即停止）。
+        Step 6：在描述框末尾追加换行和实际描述（致命步骤，失败即停止）。
 
         Returns:
             (success, message)
         """
-        category_selectors = [
-            'div[class*="category"] select',
-            'select[class*="category"]',
-            'div[class*="Category"] select',
-            'div[class*="category"][class*="select"]',
-            'div[class*="categorySelect"]',
-            '.ant-select',
-            'span[class*="category"]',
+        desc_selectors = [
+            'div[contenteditable="true"][class*="editor"]',
+            'div[contenteditable="true"][data-placeholder*="描述"]',
+            'div[contenteditable="true"][data-spm-anchor-id*="publish"]',
+            'div[contenteditable="true"][class*="desc"]',
+            'div[contenteditable="true"][class*="Desc"]',
+            'textarea[placeholder*="描述"]',
+            'textarea',
         ]
-        for category in categories:
-            for sel in category_selectors:
+        for sel in desc_selectors:
+            try:
+                el = page.locator(sel).first
+                if el.is_visible(timeout=3000):
+                    el.click()
+                    _random_delay(0.3, 0.6)
+                    page.keyboard.press("Control+End")
+                    _random_delay(0.2, 0.4)
+                    page.keyboard.press("Enter")
+                    for char in description:
+                        page.keyboard.type(char)
+                        time.sleep(random.uniform(0.03, 0.12))
+                    _random_delay(0.5, 1.0)
+                    log_info(f"FishClaw [fill_item_info] Step6: 已追加宝贝描述（{sel}）")
+                    return True, f"宝贝描述已追加（sel={sel}）"
+            except Exception as e:
+                log_warning(f"FishClaw [fill_item_info] Step6: 追加描述失败（{sel}）: {e}")
+                continue
+        return False, "未能找到描述输入框，发布页面结构可能已变更。"
+
+    def _post_step_select_category(self, page: Any, categories: List) -> Tuple[bool, str]:
+        """
+        Step 5：选择商品分类（致命步骤，失败即停止）。
+        支持需要滚动才能找到目标分类的下拉列表场景。
+
+        Returns:
+            (success, message)
+        """
+        # 触发下拉弹窗的选择器（从精确到广泛逐步扩展）
+        trigger_selectors = [
+            # 常见 class 含 category
+            'div[class*="categorySelect"]',
+            'div[class*="CategorySelect"]',
+            'div[class*="category-select"]',
+            'div[class*="category"][class*="select"]',
+            'div[class*="category"][class*="picker"]',
+            'span[class*="category"]',
+            # ant-design 风格
+            '.ant-select',
+            '.ant-select-selector',
+            # 常见选择器
+            'select[class*="category"]',
+            'div[class*="category"] select',
+            'div[class*="Category"] select',
+            # 平铺文字匹配
+            'div:has-text("选择分类")',
+            'span:has-text("选择分类")',
+            ':text("请选择分类")',
+            ':text("商品分类")',
+        ]
+
+        def _try_click_option(cat: str) -> bool:
+            # 尝试直接点击页面上已存在的目标选项（限精确文字匹配）
+
+            for loc_str in [
+                f'li:text-is("{cat}")',
+                f'div[class*="option"]:text-is("{cat}")',
+                f'div[class*="item"]:text-is("{cat}")',
+                f'span:text-is("{cat}")',
+            ]:
                 try:
-                    el = page.locator(sel).first
-                    if el.is_visible(timeout=2000): 
+                    el = page.locator(loc_str).first
+                    el.scroll_into_view_if_needed(timeout=1500)
+                    if el.is_visible(timeout=800):
                         el.click()
-                        _random_delay(0.5, 1.0)
-                        option_sel = (
-                            f'div[class*="option"]:has-text("{category}"), '
-                            f'li:has-text("{category}"), '
-                            f'option:has-text("{category}")'
-                        )
-                        opt = page.locator(option_sel).first
-                        if opt.is_visible(timeout=2000):
-                            opt.click()
-                            _random_delay(0.5, 1.0)
-                            log_info(f"FishClaw [fill_item_info] Step5: 已选择分类「{category}」")
-                            return True, f"已选择分类「{category}」"
-                except Exception as e:
-                    log_warning(f"FishClaw [fill_item_info] Step5: 选择分类失败（{sel}）: {e}")
+                        _random_delay(0.4, 0.8)
+                        log_info(f"FishClaw [fill_item_info] Step5: 已选择分类「{cat}」 ({loc_str})")
+                        return True
+                except Exception:
+                    pass
+            return False
+
+        for category in categories:
+            log_info(f"FishClaw [fill_item_info] Step5: 尝试选择分类「{category}」")
+
+            # ── 方案A：弹窗已展开，直接点击 ──
+            if _try_click_option(category):
+                return True, f"已选择分类「{category}」"
+
+            # ── 方案B：点击触发器展开弹窗，再直接点击 ──
+            for sel in trigger_selectors:
+                try:
+                    trigger = page.locator(sel).first
+                    if not trigger.is_visible(timeout=1000):
+                        continue
+                    log_info(f"FishClaw [fill_item_info] Step5: 命中触发器 {sel}")
+                    trigger.click()
+                    _random_delay(0.6, 1.2)
+                    break
+                except Exception:
                     continue
 
-            return False, f"未能选择分类，发布页面结构可能已变更。"
+            if _try_click_option(category):
+                return True, f"已选择分类「{category}」"
+
+            try:
+                page.keyboard.press("Escape")
+                _random_delay(0.3, 0.5)
+            except Exception:
+                pass
+
+        return False, "未能选择分类，请确认分类名称正确，或发布页面结构已变更。"
 
     def _post_step_fill_price(self, page: Any, price: float) -> Tuple[bool, str]:
         """
@@ -1042,11 +1119,8 @@ class FishClawTools(Toolkit):
         price: float = 100.0,
     ) -> str:
         """
-        在闲鱼发布页面中填写商品信息（图片、描述、分类、价格）。
-
+        在闲鱼发布页面中填写商品信息
         本工具只负责填写信息，不会点击发布按钮。
-        每一步都是致命步骤，任意步骤失败则立即停止并返回失败原因。
-        填写成功后，请调用 post_item 完成截图确认和最终发布。
 
         Args:
             image (str): 宝贝图片，支持本地路径或网络 URL。
@@ -1058,7 +1132,6 @@ class FishClawTools(Toolkit):
         """
         step_results: List[Dict[str, Any]] = []
         _tmp_file: Optional[str] = None
-        categories = ["其他技能服务","其他闲置"]
 
         def _record(step: str, success: bool, message: str) -> None:
             step_results.append({"step": step, "success": success, "message": message})
@@ -1101,27 +1174,35 @@ class FishClawTools(Toolkit):
             if not ok:
                 return f"填写失败（Step3）：{msg}\n\n{_summary()}"
 
-            # ── Step 4：填写描述（致命）──
-            ok, msg = self._post_step_fill_description(page, description)
-            _record("Step4-填写描述", ok, msg)
+            # ── Step 4：填写触发描述，让系统自动定位到目标类目（致命）──
+            TRIGGER_TEXT = "技术服务~技术服务~技术服务~"
+            ok, msg = self._post_step_fill_description(page, TRIGGER_TEXT)
+            _record("Step4-填写触发描述", ok, msg)
             if not ok:
                 return f"填写失败（Step4）：{msg}\n\n{_summary()}"
 
             # ── Step 5：选择分类（致命）──
-            ok, msg = self._post_step_select_category(page, categories)
+            # 因触发描述已让系统预选类目，直接点击"其他技能服务"即可，无需滚动
+            ok, msg = self._post_step_select_category(page, ["其他技能服务"])
             _record("Step5-选择分类", ok, msg)
             if not ok:
                 return f"填写失败（Step5）：{msg}\n\n{_summary()}"
 
-            # ── Step 6：填写价格（致命）──
-            ok, msg = self._post_step_fill_price(page, price)
-            _record("Step6-填写价格", ok, msg)
+            # ── Step 6：追加实际描述（致命）──
+            ok, msg = self._post_step_append_description(page, description)
+            _record("Step6-追加实际描述", ok, msg)
             if not ok:
                 return f"填写失败（Step6）：{msg}\n\n{_summary()}"
 
-            # ── Step 7：截图 ──
+            # ── Step 7：填写价格（致命）──
+            ok, msg = self._post_step_fill_price(page, price)
+            _record("Step7-填写价格", ok, msg)
+            if not ok:
+                return f"填写失败（Step7）：{msg}\n\n{_summary()}"
+
+            # ── Step 8：截图 ──
             ok, screenshot_result = self._post_step_take_screenshot(page)
-            _record("Step7-截图", ok, screenshot_result)
+            _record("Step8-截图", ok, screenshot_result)
 
             return (
                 f"商品信息填写成功！"
@@ -1129,7 +1210,7 @@ class FishClawTools(Toolkit):
             )
 
         except Exception as e:
-            return f"填写商品信息时出错：{e}\n\n{_summary()}"
+            return f"填写商品信息时出错：{e}"
         finally:
             if _tmp_file and Path(_tmp_file).exists():
                 try:
@@ -1149,34 +1230,21 @@ class FishClawTools(Toolkit):
         Returns:
             str: 发布结果描述。
         """
-        step_results: List[Dict[str, Any]] = []
-
-        def _record(step: str, success: bool, message: str) -> None:
-            step_results.append({"step": step, "success": success, "message": message})
-            log_info(f"FishClaw [post_item] {'OK' if success else 'FAIL'} {step}: {message}")
-
-        def _summary() -> str:
-            lines = ["=== post_item 步骤汇总 ==="]
-            for r in step_results:
-                icon = "✓" if r["success"] else "✗"
-                lines.append(f"  [{icon}] {r['step']}: {r['message']}")
-            return "\n".join(lines)
 
         try:
             page = self._get_page()
             # requires_confirmation=True：Agent 框架在此暂停，
             # 用户查看截图并 confirm 后，框架才继续执行后续代码。
 
-            # ── Step 2：点击发布按钮 ──
+            # ── Step 8：点击发布按钮 ──
             ok, msg = self._post_step_click_publish(page)
-            _record("Step2-点击发布", ok, msg)
             if not ok:
-                return f"发布失败（Step2）：{msg}\n\n{_summary()}"
+                return f"发布失败（Step8）：{msg}"
 
-            return f"商品发布成功！\n\n{_summary()}"
+            return f"商品发布成功！"
 
         except Exception as e:
-            return f"发布时出错：{e}\n\n{_summary()}"
+            return f"发布时出错：{e}"
 
     # ══════════════════════════════════════════════════════
     # 预留：评论商品（后续实现）

@@ -52,18 +52,25 @@ class GenerateImageTools(Toolkit):
         :param all: 为 True 时注册所有工具，优先级高于各 enable_* 参数。
         """
         self.api_key: str = api_key or os.environ.get("IMAGE_API_KEY", "")
+        if not self.api_key:
+            log_warning("未提供 IMAGE_API_KEY,发布商品将使用默认assets/default_agent.png图片")
         self.model: str = model
         self.default_size: str = default_size
         self.prompt_extend: bool = prompt_extend
+
+        # 默认图片路径：本文件 -> src/tools -> src -> 项目根 -> assets/default_agent.png
+        _project_root = os.path.abspath(
+            os.path.join(os.path.dirname(__file__), "..", "..")
+        )
+        self.default_image_path: str = os.path.join(
+            _project_root, "assets", "default_agent.png"
+        )
 
         # 确定缓存目录并创建
         if cache_path:
             self.cache_path: str = os.path.abspath(cache_path)
         else:
             # 默认：本文件 -> src/tools -> src -> 项目根 -> .cache/cache_img
-            _project_root = os.path.abspath(
-                os.path.join(os.path.dirname(__file__), "..", "..")
-            )
             self.cache_path = os.path.join(_project_root, ".cache", "cache_img")
 
         os.makedirs(self.cache_path, exist_ok=True)
@@ -77,7 +84,7 @@ class GenerateImageTools(Toolkit):
         if all or enable_generate_image:
             tools.append(self.generate_image)
 
-        super().__init__(name="dashscope_image_tools", tools=tools, **kwargs)
+        super().__init__(name="generate_image_tools", tools=tools, **kwargs)
 
     # ------------------------------------------------------------------
     # Tools
@@ -97,8 +104,8 @@ class GenerateImageTools(Toolkit):
             resp = requests.get(image_url, timeout=60)
             resp.raise_for_status()
         except requests.exceptions.RequestException as e:
-            log_warning(f"[GenerateImageTools] 图像下载失败: {e}")
-            return f"error: 图像下载失败 - {e}"
+            log_warning(f"[GenerateImageTools] 图像下载失败: {e}，将使用默认图片")
+            return '图片路径已经保存到：' + self.default_image_path
 
         # 从 Content-Type 推断扩展名，默认 .png
         content_type = resp.headers.get("Content-Type", "image/png")
@@ -111,7 +118,7 @@ class GenerateImageTools(Toolkit):
             f.write(resp.content)
 
         log_info(f"[GenerateImageTools] 图像已缓存到本地: {local_path}")
-        return local_path
+        return '图片路径已经保存到：' + local_path
 
     def generate_image(
         self,
@@ -128,7 +135,8 @@ class GenerateImageTools(Toolkit):
                  失败时返回 "error: <错误信息>" 格式的字符串。
         """
         if not self.api_key:
-            return "error: 未提供 DASHSCOPE_API_KEY，请通过构造参数或环境变量设置"
+            log_warning("[GenerateImageTools] 无 API Key，返回默认图片")
+            return '图片路径已经保存到：' + self.default_image_path
 
         image_size = size or self.default_size
 
@@ -164,20 +172,20 @@ class GenerateImageTools(Toolkit):
             )
             response.raise_for_status()
         except requests.exceptions.Timeout:
-            log_warning("[GenerateImageTools] 请求超时")
-            return "error: 请求超时，请稍后重试"
+            log_warning("[GenerateImageTools] 请求超时，将使用默认图片")
+            return '图片路径已经保存到：' + self.default_image_path
         except requests.exceptions.HTTPError as e:
-            log_warning(f"[GenerateImageTools] HTTP 错误: {e}")
-            return f"error: HTTP 错误 {response.status_code} - {response.text}"
+            log_warning(f"[GenerateImageTools] HTTP 错误: {e}，将使用默认图片")
+            return '图片路径已经保存到：' + self.default_image_path
         except requests.exceptions.RequestException as e:
-            log_warning(f"[GenerateImageTools] 网络请求错误: {e}")
-            return f"error: 网络请求错误 - {e}"
+            log_warning(f"[GenerateImageTools] 网络请求错误: {e}，将使用默认图片")
+            return '图片路径已经保存到：' + self.default_image_path
 
         try:
             result = response.json()
         except ValueError:
-            log_warning("[GenerateImageTools] 响应体无法解析为 JSON")
-            return f"error: 响应解析失败 - {response.text}"
+            log_warning("[GenerateImageTools] 响应体无法解析为 JSON，将使用默认图片")
+            return '图片路径已经保存到：' + self.default_image_path
 
         # 提取图像 URL
         # 响应结构: output.choices[0].message.content[0].image_url
@@ -205,10 +213,10 @@ class GenerateImageTools(Toolkit):
                     log_info(f"[GenerateImageTools] 生图成功，准备下载缓存: {image_url}")
                     return self._download_image(image_url)
 
-            # 未能提取到 URL，返回完整响应供调试
-            log_warning(f"[GenerateImageTools] 未能从响应中提取图像 URL: {result}")
-            return f"error: 未能提取图像 URL，完整响应: {json.dumps(result, ensure_ascii=False)}"
+            # 未能提取到 URL，返回默认图片
+            log_warning(f"[GenerateImageTools] 未能从响应中提取图像 URL: {result}，将使用默认图片")
+            return '图片路径已经保存到：' + self.default_image_path
 
         except (KeyError, IndexError, TypeError) as e:
-            log_warning(f"[GenerateImageTools] 解析响应结构时出错: {e}")
-            return f"error: 解析响应失败 - {e}，完整响应: {json.dumps(result, ensure_ascii=False)}"
+            log_warning(f"[GenerateImageTools] 解析响应结构时出错: {e}，将使用默认图片")
+            return '图片路径已经保存到：' + self.default_image_path
