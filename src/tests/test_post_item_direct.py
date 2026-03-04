@@ -15,17 +15,18 @@ Version: Alpha
 import sys
 import os
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 from src.tools.xianyu_tools import FishClawTools
+from src.models.config import PROJECT_ROOT
 
 # ──────────────────────────────────────────────────────────
 # 配置（按需修改）
 # ──────────────────────────────────────────────────────────
-COOKIES_PATH = os.path.join(os.path.dirname(__file__), "..", ".cache", "cookies", "xianyu_cookies.json")
+COOKIES_PATH = os.path.join(PROJECT_ROOT, ".cache", "cookies", "xianyu_cookies.json")
 
 # 测试图片路径（相对于项目根目录的 tmp/test.png）
-IMAGE_PATH = os.path.join(os.path.dirname(__file__), "..", ".cache", "cache_img", "test.png")
+IMAGE_PATH = os.path.join(PROJECT_ROOT, ".cache", "cache_img", "test.png")
 
 # 宝贝描述
 DESCRIPTION = "aigc 虚拟服务，全新未拆封，支持7天无理由退换。"

@@ -15,7 +15,7 @@ Version: Alpha
 import sys
 import os
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 from src.tools.generate_image_tools import GenerateImageTools
 

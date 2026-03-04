@@ -17,3 +17,6 @@ MODEL = DashScope(
     base_url=os.environ.get("AGENT_LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
     temperature=float(os.environ.get("AGENT_LLM_TEMPERATURE", "0.5")),
 )
+
+
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
