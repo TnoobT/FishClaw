@@ -1,6 +1,6 @@
 # FishClaw — 闲鱼AI助手
 <p align="center">
-    <img src="assets/logo.png" alt="FishClaw Logo" width="500">
+    <img src="assets/logo.png" alt="FishClaw Logo" width="150" height="150">
 </p>
 
 开发中~
