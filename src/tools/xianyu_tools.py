@@ -1084,19 +1084,20 @@ class FishClawTools(Toolkit):
         else:
             return False, "未能找到「发布」按钮，商品信息已填写完毕，请在浏览器窗口中手动点击发布按钮。"
 
-        # 等待发布完成，检测成功提示或页面跳转
+        # 等待发布完成，检测商品详情页的「下架」/「删除」按钮（发布成功后页面会跳转到此）
         _random_delay(2.0, 3.5)
         success_selectors = [
+            'div[class*="sellerButton"]:has-text("下架")',
+            'div[class*="sellerButton"]:has-text("删除")',
             ':text("发布成功")',
             ':text("成功发布")',
-            '[class*="success"]',
         ]
         for sel in success_selectors:
             try:
                 el = page.locator(sel).first
                 if el.is_visible(timeout=4000):
-                    log_info(f"FishClaw [post_item] Step7b: 检测到发布成功提示（{sel}）")
-                    return True, f"商品发布成功！检测到成功提示：{sel}"
+                    log_info(f"FishClaw [post_item] Step7b: 检测到发布成功标志（{sel}）")
+                    return True, f"商品发布成功！检测到标志：{sel}"
             except Exception:
                 continue
 
@@ -1167,6 +1168,7 @@ class FishClawTools(Toolkit):
             if not ok:
                 return f"填写失败（Step2）：{msg}\n\n{_summary()}"
             page = publish_page
+            self._page = publish_page  # 同步更新，post_item 调用时能拿到正确的发布页
 
             # ── Step 3：上传图片 ──
             ok, msg = self._post_step_upload_image(page, local_image_path)
