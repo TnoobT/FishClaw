@@ -42,6 +42,9 @@ except ImportError:
 # ──────────────────────────────────────────────────────────
 XIANYU_HOME_URL = os.environ.get("XIANYU_HOME_URL", "https://www.goofish.com")
 
+# 浏览/评论模块：从 .env 读取自动评论内容
+BROWSE_COMMENT_TEXT = os.environ.get("BROWSE_COMMENT_TEXT", "其实养号很简单，就像我这样瞎溜达。既可以给楼主增加流量，又可以给自己提高曝光，其实，提升曝光度很简单，每天发言评论点赞就行了，曝光度能达到10万，前提是你要坚持七天＃，只要坚持七天，后面也要坚持成为优质用户，只要坚持七天，每天曝光度10万到20万之间。我测试过得很稳定也可以复制我这段话。去其他地方评论，记得给我点赞，祝楼主生意兴降其实提升曝光度很简单的，像我这样每天发言评论点赞就可以了，曝光度能达到10w这不假，前提是你要像我这样子才行、经常7天，你就是高权重、高价值用户，成为优质用户只需要坚持7天后面也需要坚持，每天的曝光度到10w-12W之间、我测试过很稳定的也可以复制我这段话去别的地方评论记")
+
 # Playwright 操作层 headless 配置：从 PLAYWRIGHT_HEADLESS 环境变量读取
 # 建议保持 false（有头模式），更难被风控识别
 _PLAYWRIGHT_HEADLESS: bool = os.environ.get("PLAYWRIGHT_HEADLESS", "false").strip().lower() == "true"
@@ -93,6 +96,7 @@ class FishClawTools(Toolkit):
         cookies_path: str = "./xianyu_cookies.json",
         enable_login: bool = True,
         enable_post_item: bool = False,
+        enable_browse: bool = False,
         enable_comment: bool = False,
         headless: bool = _PLAYWRIGHT_HEADLESS,  # 从 .env PLAYWRIGHT_HEADLESS 读取
         proxy: Optional[str] = None,
@@ -108,7 +112,7 @@ class FishClawTools(Toolkit):
         self._context: Optional[BrowserContext] = None
         self._page: Optional[Page] = None
 
-        
+
         #TODO: send_sms_code 、login_with_sms 有问题，滑块问题待解决
 
         tools: List[Any] = []
@@ -123,9 +127,12 @@ class FishClawTools(Toolkit):
                 self.post_item,
                 self.take_screenshot,
             ])
-        # 预留：后续实现
-        # if enable_comment:
-        #     tools.append(self.comment_item)
+        if enable_browse:
+            tools.extend([
+                self.random_scroll,
+                self.open_random_post,
+                self.comment_on_post,
+            ])
 
         super().__init__(name="xianyu_tools", tools=tools, **kwargs)
 
@@ -1312,12 +1319,243 @@ class FishClawTools(Toolkit):
             return f"截图时出错：{e}"
 
     # ══════════════════════════════════════════════════════
-    # 预留：评论商品（后续实现）
+    # 工具方法 6：随机上下滑动，模拟浏览
     # ══════════════════════════════════════════════════════
 
-    # def comment_item(self, item_url: str, comment: str) -> str:
-    #     """评论他人闲鱼商品"""
-    #     ...
+    def random_scroll(self, rounds: int = 5) -> str:
+        """
+        在当前页面随机上下滑动，模拟用户自然浏览帖子流。
+
+        若当前没有已打开的页面，会先加载闲鱼首页再滑动。
+
+        Args:
+            rounds (int): 滑动轮次，每轮随机上/下滚动一定距离，默认 5 次。
+
+        Returns:
+            str: 操作摘要，包含每轮滚动方向和距离。
+        """
+        try:
+            if self._page is None:
+                page = self._get_page()
+                self._load_cookies()
+                log_info("FishClaw [random_scroll]: 无已打开页面，先访问闲鱼首页...")
+                page.goto(XIANYU_HOME_URL, wait_until="domcontentloaded", timeout=30000)
+                _random_delay(1.5, 2.5)
+            else:
+                page = self._page
+
+            records: List[str] = []
+            for i in range(rounds):
+                # 随机决定方向：向下概率 70%，向上 30%（更像真实浏览）
+                direction = "down" if random.random() < 0.7 else "up"
+                distance = random.randint(300, 800)
+                delta = distance if direction == "down" else -distance
+                page.mouse.wheel(0, delta)
+                _random_delay(0.8, 2.5)
+                records.append(f"第{i+1}轮：{'向下' if direction=='down' else '向上'}滚动 {distance}px")
+                log_info(f"FishClaw [random_scroll]: {records[-1]}")
+
+            return "随机滑动完成。\n" + "\n".join(records)
+
+        except Exception as e:
+            return f"随机滑动时出错：{e}"
+
+    # ══════════════════════════════════════════════════════
+    # 工具方法 7：随机点进一个帖子
+    # ══════════════════════════════════════════════════════
+
+    def open_random_post(self) -> str:
+        """
+        在当前页面随机选取一个帖子/商品卡片并点击进入详情页。
+
+        会自动在可见的商品链接中随机选择一个点击，点击后等待页面加载完成。
+
+        Returns:
+            str: 成功则返回进入的帖子标题与 URL，失败则返回错误信息。
+        """
+        try:
+            if self._page is None:
+                page = self._get_page()
+                self._load_cookies()
+                log_info("FishClaw [open_random_post]: 无已打开页面，先访问闲鱼首页...")
+                page.goto(XIANYU_HOME_URL, wait_until="domcontentloaded", timeout=30000)
+                _random_delay(1.5, 2.5)
+            else:
+                page = self._page
+
+            # 尝试多种选择器匹配商品卡片/帖子链接
+            card_selectors = [
+                'a[href*="/item/"]',
+                'a[href*="/detail/"]',
+                'a[href*="/goods/"]',
+                'div[class*="card"] a',
+                'div[class*="item"] a',
+                'div[class*="product"] a',
+                'div[class*="feed"] a',
+            ]
+
+            candidates = []
+            for sel in card_selectors:
+                try:
+                    els = page.locator(sel).all()
+                    for el in els:
+                        try:
+                            if el.is_visible(timeout=500):
+                                candidates.append(el)
+                        except Exception:
+                            continue
+                    if candidates:
+                        break
+                except Exception:
+                    continue
+
+            if not candidates:
+                return "未能在当前页面找到任何帖子链接，请先滑动加载内容后重试。"
+
+            target = random.choice(candidates)
+            # 获取链接文字用于日志
+            try:
+                link_text = target.inner_text()[:40].strip() or "(无标题)"
+            except Exception:
+                link_text = "(无标题)"
+
+            log_info(f"FishClaw [open_random_post]: 即将点击帖子「{link_text}」...")
+            target.scroll_into_view_if_needed(timeout=2000)
+            _random_delay(0.5, 1.2)
+            target.click()
+
+            # 等待详情页加载
+            _random_delay(2.0, 3.5)
+            current_url = page.url
+            title = page.title()
+            log_info(f"FishClaw [open_random_post]: 已进入帖子，URL={current_url}")
+            return f"已进入帖子：{title}\nURL：{current_url}"
+
+        except Exception as e:
+            return f"点击帖子时出错：{e}"
+
+    # ══════════════════════════════════════════════════════
+    # 工具方法 8：在当前帖子评论
+    # ══════════════════════════════════════════════════════
+
+    def comment_on_post(self) -> str:
+        """
+        在当前已打开的帖子详情页发表评论。
+
+        评论内容从 .env 中的 BROWSE_COMMENT_TEXT 读取。
+        若页面尚未打开或不是帖子详情页，会返回错误提示。
+
+        Returns:
+            str: 评论结果描述。
+        """
+        if self._page is None:
+            return "当前没有已打开的帖子页面，请先调用 open_random_post 进入一个帖子后再评论。"
+
+        comment_text = BROWSE_COMMENT_TEXT
+        if not comment_text.strip():
+            return "评论内容为空，请在 .env 中设置 BROWSE_COMMENT_TEXT。"
+
+        try:
+            page = self._page
+
+            # ── Step 1：找到评论输入框 ──
+            input_selectors = [
+                'textarea[placeholder*="评论"]',
+                'textarea[placeholder*="说点什么"]',
+                'textarea[placeholder*="留言"]',
+                'div[class*="comment"] textarea',
+                'div[class*="reply"] textarea',
+                'div[contenteditable="true"][class*="comment"]',
+                'div[contenteditable="true"][class*="input"]',
+                'textarea',
+            ]
+
+            comment_el = None
+            for sel in input_selectors:
+                try:
+                    el = page.locator(sel).first
+                    if el.is_visible(timeout=2000):
+                        comment_el = el
+                        log_info(f"FishClaw [comment_on_post]: 找到评论输入框（{sel}）")
+                        break
+                except Exception:
+                    continue
+
+            if comment_el is None:
+                # 尝试先点击"说点什么"触发输入框出现
+                trigger_selectors = [
+                    'div:has-text("说点什么")',
+                    'span:has-text("说点什么")',
+                    'div[class*="comment-input"]',
+                    'div[class*="commentInput"]',
+                    'div[class*="input-area"]',
+                ]
+                for sel in trigger_selectors:
+                    try:
+                        el = page.locator(sel).first
+                        if el.is_visible(timeout=1500):
+                            el.click()
+                            _random_delay(0.8, 1.5)
+                            log_info(f"FishClaw [comment_on_post]: 已点击评论触发器（{sel}）")
+                            break
+                    except Exception:
+                        continue
+
+                for sel in input_selectors:
+                    try:
+                        el = page.locator(sel).first
+                        if el.is_visible(timeout=2000):
+                            comment_el = el
+                            break
+                    except Exception:
+                        continue
+
+            if comment_el is None:
+                return "未能找到评论输入框，当前页面可能不支持评论或页面结构已变更。"
+
+            # ── Step 2：点击聚焦并逐字输入评论 ──
+            comment_el.click()
+            _random_delay(0.4, 0.8)
+            for char in comment_text:
+                page.keyboard.type(char)
+                time.sleep(random.uniform(0.05, 0.18))
+            _random_delay(0.8, 1.5)
+            log_info(f"FishClaw [comment_on_post]: 已输入评论内容「{comment_text[:20]}...」")
+
+            # ── Step 3：点击发送按钮 ──
+            send_selectors = [
+                'button:has-text("发送")',
+                'button:has-text("评论")',
+                'button:has-text("提交")',
+                'span:has-text("发送")',
+                'div[class*="send-btn"]',
+                'div[class*="sendBtn"]',
+                'div[class*="submit-btn"]',
+            ]
+            sent = False
+            for sel in send_selectors:
+                try:
+                    el = page.locator(sel).first
+                    if el.is_visible(timeout=1500):
+                        _random_delay(0.3, 0.8)
+                        el.click()
+                        sent = True
+                        log_info(f"FishClaw [comment_on_post]: 已点击发送按钮（{sel}）")
+                        break
+                except Exception:
+                    continue
+
+            if not sent:
+                # 尝试 Enter 键提交
+                page.keyboard.press("Enter")
+                sent = True
+                log_info("FishClaw [comment_on_post]: 已按 Enter 提交评论")
+
+            _random_delay(1.5, 2.5)
+            return f"评论已发送：「{comment_text}」"
+
+        except Exception as e:
+            return f"评论时出错：{e}"
 
     # ══════════════════════════════════════════════════════
     # 析构：确保浏览器关闭
