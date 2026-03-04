@@ -121,6 +121,7 @@ class FishClawTools(Toolkit):
             tools.extend([
                 self.fill_item_info,
                 self.post_item,
+                self.take_screenshot,
             ])
         # 预留：后续实现
         # if enable_comment:
@@ -870,7 +871,7 @@ class FishClawTools(Toolkit):
                 if el.is_visible(timeout=3000):
                     el.click()
                     _random_delay(0.3, 0.6)
-                    el.click(click_count=3)
+                    page.keyboard.press("Control+A")  # 全选，兼容多行内容
                     _random_delay(0.2, 0.4)
                     for char in description:
                         page.keyboard.type(char)
@@ -1115,21 +1116,28 @@ class FishClawTools(Toolkit):
 
     def fill_item_info(
         self,
-        image: str,
-        description: str,
+        mode: str = "all_steps",
+        image: str = "",
+        description: str = "",
         price: float = 100.0,
     ) -> str:
         """
-        在闲鱼发布页面中填写商品信息
-        本工具只负责填写信息，不会点击发布按钮。
+        在闲鱼发布页面中填写商品信息。
 
         Args:
-            image (str): 宝贝图片，支持本地路径或网络 URL。
-            description (str): 宝贝描述文字。
-            price (float): 商品售价（元），默认 100.0。
+            mode (str): 执行模式。
+                - "all_steps"   ：完整流程（默认），依次上传图片、填写描述、选择分类、填写价格，最后截图。
+                                  需要提供 image 和 description。
+                - "modify_description" ：仅更新描述。在已打开的发布页上清空并重新填写描述，然后截图。
+                                  需要提供 description。
+                - "modify_price" ：仅更新价格。在已打开的发布页上清空并重新填写价格，然后截图。
+                                  需要提供 price。
+            image (str): 宝贝图片，支持本地路径或网络 URL。mode="all_steps" 时必填。
+            description (str): 宝贝描述文字。mode="all_steps" 或 "modify_description" 时必填。
+            price (float): 商品售价（元），默认 100.0。mode="all_steps" 或 "modify_price" 时必填。
 
         Returns:
-            str: 包含所有步骤结果的汇总报告，或第一个失败步骤的错误信息。
+            str: 包含所有步骤结果的汇总报告，或失败步骤的错误信息。
         """
         step_results: List[Dict[str, Any]] = []
         _tmp_file: Optional[str] = None
@@ -1145,6 +1153,38 @@ class FishClawTools(Toolkit):
                 lines.append(f"  [{icon}] {r['step']}: {r['message']}")
             return "\n".join(lines)
 
+        # ── 局部更新模式（description / price）──
+        if mode in ("modify_description", "modify_price"):
+            try:
+                if self._page is None:
+                    return "当前没有已打开的发布页面，请先执行 fill_item_info（mode='all_steps'）完成初始填写。"
+
+                page = self._page
+
+                if mode == "modify_description":
+                    if not description:
+                        return "mode='modify_description' 时必须提供 description 参数。"
+                    ok, msg = self._post_step_fill_description(page, description)
+                    _record("更新描述", ok, msg)
+                    if not ok:
+                        return f"更新描述失败：{msg}"
+
+                elif mode == "modify_price":
+                    ok, msg = self._post_step_fill_price(page, price)
+                    _record("更新价格", ok, msg)
+                    if not ok:
+                        return f"更新价格失败：{msg}"
+
+                # 局部更新完成后截图
+                ok, screenshot_result = self._post_step_take_screenshot(page)
+                _record("截图", ok, screenshot_result)
+
+                return f"已更新{'描述' if mode == 'modify_description' else '价格'}，接下来问用户是否发布，并调用 post_item 发布商品。"
+
+            except Exception as e:
+                return f"局部更新时出错：{e}"
+
+        # ── 完整流程（all_steps）──
         try:
             page = self._get_page()
 
@@ -1247,6 +1287,29 @@ class FishClawTools(Toolkit):
 
         except Exception as e:
             return f"发布时出错：{e}"
+
+    # ══════════════════════════════════════════════════════
+    # 工具方法 5c：截图
+    # ══════════════════════════════════════════════════════
+
+    def take_screenshot(self) -> str:
+        """
+        对当前浏览器页面截图，保存到 .cache/screenshot 目录。
+
+        可在任意时机调用，用于确认当前页面状态。
+
+        Returns:
+            str: 截图保存的绝对路径，或错误信息。
+        """
+        if self._page is None:
+            return "当前没有已打开的浏览器页面，无法截图。"
+        try:
+            ok, result = self._post_step_take_screenshot(self._page)
+            if ok:
+                return f"截图已保存到：{result}"
+            return f"截图失败：{result}"
+        except Exception as e:
+            return f"截图时出错：{e}"
 
     # ══════════════════════════════════════════════════════
     # 预留：评论商品（后续实现）

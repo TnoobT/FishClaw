@@ -27,6 +27,7 @@ from agno.agent import Agent
 from agno.db.sqlite import SqliteDb
 from src.tools.xianyu_tools import FishClawTools
 from src.tools.generate_image_tools import GenerateImageTools
+from src.tools.prompt_tools import PromptTools
 from src.models.config import MODEL
 # ──────────────────────────────────────────────────────────
 # 配置区（按需修改）
@@ -47,6 +48,7 @@ xianyu_tools = FishClawTools(
     enable_post_item=True,
 )
 generate_image_tools = GenerateImageTools()
+prompt_tools = PromptTools()
 
 
 agent = Agent(
@@ -54,14 +56,18 @@ agent = Agent(
     description=(
         "你是一个闲鱼账号助手。"
         "你的职责是：登录闲鱼账号并发布商品。"
-        "如果要发布商品，你需要先调用generate_image_tools生成图片，注意调用这个工具的提示词你要润色一下"
-        "然后调用fill_item_info填写商品信息，最后调用post_item发布商品。"
-        "请做与闲鱼相关的事情之前要检查登录状态，如果未登录则先扫码登录，以下是流程：\n"
-        "1. 先调用 check_login_status 检查是否已登录，如果已登录则任务完成。\n"
-        "2. 如果未登录，调用 login_with_qrcode 扫码登录。\n"
-        "注意不要一次性调用多个工具，你要根据上一轮的反馈结果决定下一步操作。"
+        "发布商品时，严格按以下顺序逐步执行：\n"
+        "1. 调用 generate_image_prompt，传入用户提到的技术主题，获取英文生图提示词。\n"
+        "2. 把上一步返回的提示词传给 generate_image，生成商品图片，获取本地图片路径。\n"
+        "3. 调用 generate_product_description，传入用户提到的技术主题，获取约500字的商品描述文案。\n"
+        "4. 把图片路径和商品描述传给 fill_item_info，填写商品信息。\n"
+        "5. 调用 post_item 发布商品。\n"
+        "做任何闲鱼操作前，先检查登录状态：\n"
+        "- 先调用 check_login_status，如果已登录则继续任务。\n"
+        "- 如果未登录，调用 login_with_qrcode 扫码登录后再继续。\n"
+        "注意：每次只调用一个工具，根据上一步的返回结果再决定下一步。"
     ),
-    tools=[xianyu_tools,generate_image_tools],
+    tools=[xianyu_tools, generate_image_tools, prompt_tools],
     model=MODEL,
     markdown=True,
     db=SqliteDb(db_file=".cache/tmp/xianyu_agent.db"),
