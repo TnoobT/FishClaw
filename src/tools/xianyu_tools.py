@@ -94,10 +94,10 @@ class FishClawTools(Toolkit):
     def __init__(
         self,
         cookies_path: str = "./xianyu_cookies.json",
-        enable_login: bool = True,
-        enable_post_item: bool = False,
-        enable_browse: bool = False,
-        enable_comment: bool = False,
+        enable_login: bool = True, # 启动登陆工具
+        enable_post_item: bool = False, # 启动发布商品工具
+        enable_browse: bool = False, # 启动浏览工具
+        enable_manager_item: bool = False, # 启动管理商品工具
         headless: bool = _PLAYWRIGHT_HEADLESS,  # 从 .env PLAYWRIGHT_HEADLESS 读取
         proxy: Optional[str] = None,
         **kwargs,
@@ -114,24 +114,30 @@ class FishClawTools(Toolkit):
 
 
         #TODO: send_sms_code 、login_with_sms 有问题，滑块问题待解决
+        #Waring: comment_on_post评论工具无用，页面端无评论功能
 
         tools: List[Any] = []
+        tools.append(self.take_screenshot)
+        tools.append(self.check_login_status)
         if enable_login:
             tools.extend([
-                self.check_login_status,
                 self.login_with_qrcode,
             ])
         if enable_post_item:
             tools.extend([
                 self.fill_item_info,
                 self.post_item,
-                self.take_screenshot,
             ])
         if enable_browse:
             tools.extend([
                 self.random_scroll,
                 self.open_random_post,
-                self.comment_on_post,
+            ])
+        if enable_manager_item:
+            tools.extend([
+                self.open_profile,
+                self.get_selling_items,
+                self.delete_item,
             ])
 
         super().__init__(name="xianyu_tools", tools=tools, **kwargs)
@@ -1556,6 +1562,277 @@ class FishClawTools(Toolkit):
 
         except Exception as e:
             return f"评论时出错：{e}"
+
+    # ══════════════════════════════════════════════════════
+    # 工具方法 9：打开个人中心（我的闲鱼）
+    # ══════════════════════════════════════════════════════
+
+    def open_profile(self) -> str:
+        """
+        打开闲鱼个人中心（我的闲鱼）页面, 管理已经发布的商品。
+
+        Returns:
+            str: 成功返回当前页面 URL，失败返回错误描述。
+        """
+        try:
+            if self._page is None:
+                page = self._get_page()
+                self._load_cookies()
+                log_info("FishClaw [open_profile]: 无已打开页面，先访问闲鱼首页...")
+                page.goto(XIANYU_HOME_URL, wait_until="domcontentloaded", timeout=30000)
+                _random_delay(1.5, 2.5)
+            else:
+                page = self._page
+
+            profile_urls = [
+                "https://www.goofish.com/personal",
+            ]
+            for url in profile_urls:
+                try:
+                    page.goto(url, wait_until="domcontentloaded", timeout=15000)
+                    _random_delay(1.5, 2.5)
+                    current = page.url
+                    if "login" not in current and "error" not in current:
+                        self._page = page
+                        log_info(f"FishClaw [open_profile] Step3: 已直接导航到 {current}")
+                        return f"已打开个人中心：{current}"
+                except Exception:
+                    continue
+
+            return "未能找到「我的闲鱼」入口，请确认已登录，或页面结构已更新。"
+
+        except Exception as e:
+            return f"打开个人中心时出错：{e}"
+
+    # ══════════════════════════════════════════════════════
+    # 工具方法 10：获取在售商品列表
+    # ══════════════════════════════════════════════════════
+
+    def get_selling_items(self) -> str:
+        """
+        在「我的闲鱼」页面获取当前账号所有在售商品。
+
+        Returns:
+            str: 所有在售商品的汇总文本（序号、标题、价格、链接）。
+        """
+        try:
+            # 确保在个人中心页面
+            if self._page is None or "profile" not in self._page.url and "user" not in self._page.url:
+                log_info("FishClaw [get_selling_items]: 当前不在个人中心，先调用 open_profile...")
+                result = self.open_profile()
+                if "出错" in result or "未能" in result:
+                    return f"无法进入个人中心：{result}"
+
+            page = self._page
+
+            # ── Step 1：点击「在售」Tab ──
+            selling_tab_selectors = [
+                ':text("在售")',
+                'span:text-is("在售")',
+                'div[class*="tab"]:has-text("在售")',
+                'li[class*="tab"]:has-text("在售")',
+                'a:has-text("在售")',
+            ]
+            clicked_tab = False
+            for sel in selling_tab_selectors:
+                try:
+                    el = page.locator(sel).first
+                    if el.is_visible(timeout=3000):
+                        el.click()
+                        _random_delay(1.0, 2.0)
+                        log_info(f"FishClaw [get_selling_items] Step1: 已点击「在售」Tab（{sel}）")
+                        clicked_tab = True
+                        break
+                except Exception:
+                    continue
+
+            if not clicked_tab:
+                log_warning("FishClaw [get_selling_items] Step1: 未找到「在售」Tab，尝试直接采集...")
+
+            # ── Step 2：用 JS 滚动采集所有商品卡片 ──
+            # 实际页面结构：商品卡片是 <a> 包含 <img class*="feeds-image"> 的结构
+            COLLECT_JS = """
+() => {
+    const results = [];
+    const links = document.querySelectorAll('a:has(img[class*="feeds-image"])');
+    links.forEach(a => {
+        const href = a.getAttribute('href') || '';
+        if (!href) return;
+
+        // 标题：收集所有文本节点，过滤掉纯价格
+        const allText = Array.from(a.querySelectorAll('*'))
+            .flatMap(el => Array.from(el.childNodes)
+                .filter(n => n.nodeType === 3)
+                .map(n => n.textContent.trim()))
+            .filter(t => t && !t.startsWith('¥') && !/^[\d.,]+$/.test(t));
+        const title = (allText[0] || a.getAttribute('title') || '(无标题)').slice(0, 60);
+
+        // 价格：找 class*=price 元素或以 ¥ 开头的文本
+        const priceEl = a.querySelector('[class*="price"]') ||
+                        Array.from(a.querySelectorAll('*'))
+                            .find(el => el.textContent.trim().startsWith('¥'));
+        const price = priceEl ? priceEl.textContent.trim().slice(0, 20) : '';
+
+        results.push({ href, title, price });
+    });
+    return results;
+}
+"""
+
+            seen_hrefs: set = set()
+            items: List[Dict[str, str]] = []
+            max_scroll_rounds = 30
+            no_new_count = 0
+
+            for _ in range(max_scroll_rounds):
+                try:
+                    card_list = page.evaluate(COLLECT_JS)
+                    for card in card_list:
+                        href = card.get("href", "")
+                        if not href or href in seen_hrefs:
+                            continue
+                        seen_hrefs.add(href)
+                        full_href = href if href.startswith("http") else f"https://www.goofish.com{href}"
+                        items.append({
+                            "title": card.get("title", "(无标题)") or "(无标题)",
+                            "price": card.get("price", ""),
+                            "href": full_href,
+                        })
+                except Exception as e:
+                    log_warning(f"FishClaw [get_selling_items] JS 采集异常: {e}")
+
+                prev_count = len(items)
+                page.mouse.wheel(0, 900)
+                _random_delay(1.2, 2.0)
+                after_count = len(items)
+
+                if after_count == prev_count:
+                    no_new_count += 1
+                    if no_new_count >= 2:
+                        log_info("FishClaw [get_selling_items] Step2: 已滚动到底部，无新商品。")
+                        break
+                else:
+                    no_new_count = 0
+
+            if not items:
+                return "未找到任何在售商品。请确认账号有在售商品，或当前页面不是个人中心。"
+
+            lines = [f"共找到 {len(items)} 件在售商品："]
+            for i, item in enumerate(items, 1):
+                price_str = f"  价格：{item['price']}" if item['price'] else ""
+                lines.append(f"{i}. 【{item['title']}】{price_str}\n   链接：{item['href']}")
+            log_info(f"FishClaw [get_selling_items]: 共采集到 {len(items)} 件在售商品")
+            return "\n".join(lines)
+
+        except Exception as e:
+            return f"获取在售商品时出错：{e}"
+
+    # ══════════════════════════════════════════════════════
+    # 工具方法 11：删除（下架）商品
+    # ══════════════════════════════════════════════════════
+    @tool(requires_confirmation=True)
+    def delete_item(self, item_url: str) -> str:
+        """
+        进入指定商品详情页，点击「删除」按钮下架/删除该商品。
+
+        Args:
+            item_url (str): 要删除的商品详情页 URL（由 get_selling_items 获取）。
+
+        Returns:
+            str: 操作结果描述。
+        """
+        try:
+            if not item_url.strip():
+                return "item_url 不能为空，请传入有效的商品详情页 URL。"
+
+            page = self._get_page()
+
+            # ── Step 1：导航到商品详情页 ──
+            log_info(f"FishClaw [delete_item] Step1: 正在打开商品页面 {item_url[:80]}...")
+            page.goto(item_url, wait_until="domcontentloaded", timeout=30000)
+            _random_delay(1.5, 2.5)
+
+            # ── Step 2：找到并点击「删除」按钮 ──
+            delete_selectors = [
+                'div[class*="sellerButton"]:has-text("删除")',
+                'button:has-text("删除")',
+                'span:has-text("删除")',
+                'a:has-text("删除")',
+                'div[class*="delete"]:has-text("删除")',
+                'div[class*="Delete"]:has-text("删除")',
+                ':text-is("删除")',
+            ]
+            clicked_delete = False
+            for sel in delete_selectors:
+                try:
+                    el = page.locator(sel).first
+                    if el.is_visible(timeout=3000):
+                        el.scroll_into_view_if_needed(timeout=2000)
+                        _random_delay(0.5, 1.0)
+                        el.click()
+                        _random_delay(1.0, 2.0)
+                        log_info(f"FishClaw [delete_item] Step2: 已点击「删除」按钮（{sel}）")
+                        clicked_delete = True
+                        break
+                except Exception:
+                    continue
+
+            if not clicked_delete:
+                return (
+                    f"未能在商品详情页找到「删除」按钮。\n"
+                    f"当前 URL：{page.url}\n"
+                    f"请确认商品 URL 正确，或该商品已被删除/下架。"
+                )
+
+            # ── Step 3：处理二次确认弹窗（如有）──
+            confirm_selectors = [
+                'button:has-text("确认")',
+                'button:has-text("确定")',
+                'button:has-text("删除")',
+                'span:has-text("确认")',
+                'div[class*="confirm"]:has-text("确认")',
+                'div[class*="modal"] button:has-text("确认")',
+                'div[class*="dialog"] button:has-text("确认")',
+            ]
+            for sel in confirm_selectors:
+                try:
+                    el = page.locator(sel).first
+                    if el.is_visible(timeout=2000):
+                        el.click()
+                        _random_delay(1.0, 2.0)
+                        log_info(f"FishClaw [delete_item] Step3: 已点击二次确认弹窗（{sel}）")
+                        break
+                except Exception:
+                    continue
+
+            # ── Step 4：等待页面变化，确认删除结果 ──
+            _random_delay(2.0, 3.0)
+            current_url = page.url
+            current_title = page.title()
+
+            # 若页面跳转离开了商品详情，认为删除成功
+            if item_url.rstrip("/") not in current_url.rstrip("/"):
+                log_info(f"FishClaw [delete_item] Step4: 页面已跳转，删除成功。当前 URL={current_url}")
+                return f"商品已成功删除！当前页面：{current_title}（{current_url[:80]}）"
+
+            # 检测成功提示文字
+            success_keywords = ["删除成功", "已删除", "已下架", "操作成功"]
+            for kw in success_keywords:
+                try:
+                    if page.locator(f':text("{kw}")').first.is_visible(timeout=2000):
+                        log_info(f"FishClaw [delete_item] Step4: 检测到成功提示「{kw}」")
+                        return f"商品已成功删除！（检测到提示：{kw}）"
+                except Exception:
+                    continue
+
+            return (
+                f"已点击「删除」按钮，但未检测到明确的成功提示。\n"
+                f"当前页面：{current_title}（{current_url[:80]}）\n"
+                f"请在浏览器中确认商品是否已删除。"
+            )
+
+        except Exception as e:
+            return f"删除商品时出错：{e}"
 
     # ══════════════════════════════════════════════════════
     # 析构：确保浏览器关闭
