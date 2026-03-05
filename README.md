@@ -49,26 +49,27 @@
 对话式发布闲鱼商品，全流程自动化：
 - 根据技术主题自动生成科技感封面图（调用阿里云 DashScope 图像生成模型）
 - 自动生成第一人称口语化商品描述文案（约 500 字，由 LLM 生成）
-- 自动填写发布表单（图片上传、描述、分类选择、价格）
-- 发布前截图供用户确认，点击确认后提交
+- 自动填写发布表单（图片上传、描述、分类选择、价格），发布前截图供用户确认
+- 用户确认后点击发布（含二次确认机制，防误操作）
 
 ### ✅ 管理商品
-- 打开个人中心，获取所有在售商品列表（标题、价格、链接）
-- 指定商品 URL 后一键 **下架**（草稿状态，可重新上架）或 **删除**（含二次确认）
-- 一键 **刷新/置顶** 商品，提升搜索排名（每件每天可刷新一次）
-- 查看商品 **浏览量、收藏数、成交数** 等数据，评估商品表现
+- 自动跳转个人中心，滚动采集所有在售商品列表（标题、价格、链接）
+- 指定商品 URL 后一键 **下架**（草稿状态，可重新上架）或 **删除**（永久删除，含二次确认）
 
 ### ✅ 市场调研
 - 关键词搜索闲鱼商品，采集标题、价格、链接，用于竞品调研和定价参考
 
 ### ✅ 通用工具
-- `goto`：跳转到任意 URL，配合其他工具灵活使用
-- `get_page_content`：读取当前页面可见文字，让 AI 感知浏览器状态
+- `get_page_content`：读取当前页面可见文字，让 AI 感知浏览器实时状态
 
 ### ✅ 登录管理
-- 扫码登录（自动检测二维码弹窗，引导用户扫码）
+- 扫码登录（引导用户在弹出浏览器中手动扫码，等待最多 180 秒）
 - Cookie 本地持久化，重启后免重复登录
-- 每次操作前自动检查登录状态
+- 所有业务工具内置登录检查拦截器，未登录自动触发扫码流程
+
+### ✅ 养号（可选）
+- 模拟真人随机浏览首页、滚动、点进帖子再返回，降低账号风控风险
+- 默认关闭，需在初始化时传入 `enable_farming=True`
 
 ---
 
@@ -95,6 +96,15 @@ FishClaw/
 │   │   ├── xianyu_tools.py        # Playwright 闲鱼自动化工具集
 │   │   ├── generate_image_tools.py # 图像生成工具（DashScope）
 │   │   └── prompt_tools.py        # 提示词生成工具（生图词 + 商品文案）
+│   ├── tests/
+│   │   ├── test_login.py          # 登录工具单测
+│   │   ├── test_search_market.py  # 市场搜索单测
+│   │   ├── test_draft_item.py     # 草稿填写单测
+│   │   ├── test_publish_item.py   # 商品发布单测
+│   │   ├── test_get_selling_items.py # 在售列表单测
+│   │   ├── test_manage_item.py    # 商品管理单测
+│   │   ├── test_get_page_content.py  # 页面内容单测
+│   │   └── test_simulate_farming.py  # 养号单测
 │   └── cookbook/
 │       ├── post_item_agent.py     # 单功能发布 Agent 示例
 │       └── manager_item_agent.py  # 单功能管理 Agent 示例
@@ -155,19 +165,13 @@ You: 帮我发布一个 Python 爬虫技术服务的商品，价格 99 元
 # → 自动生成封面图、文案，填写表单，截图确认后发布
 
 You: 查看我现在在售的商品
-# → 打开个人中心，列出所有在售商品
+# → 自动跳转个人中心，滚动采集所有在售商品列表
 
 You: 把第二个商品下架
-# → 进入商品详情，点击「下架」按钮并确认
+# → 进入商品详情，点击「下架」并处理确认弹窗
 
 You: 删除第三个商品
 # → 进入商品详情，点击「删除」并处理二次确认弹窗
-
-You: 帮我把第一个商品刷新一下
-# → 进入商品详情，点击「刷新」按钮提升排名
-
-You: 查看第一个商品的浏览量和收藏数
-# → 打开商品详情页，采集并展示数据
 
 You: 搜索一下 Python 教程，看看竞品价格
 # → 在闲鱼搜索，采集前 20 条结果的标题和价格
@@ -177,41 +181,33 @@ You: 搜索一下 Python 教程，看看竞品价格
 
 ## 工具速查
 
-### 始终可用
+### FishClawTools（闲鱼自动化）
+
+| 工具 | 说明 | 确认 |
+|------|------|------|
+| `login` | 检查登录状态；未登录则弹出浏览器等待扫码 | — |
+| `search_market(keyword)` | 搜索闲鱼商品，采集标题、价格、链接 | — |
+| `draft_item(image, description, price)` | 填写商品草稿（图片/描述/分类/价格）并截图 | — |
+| `publish_item()` | 点击发布按钮完成商品发布 | ⚠️ |
+| `get_selling_items()` | 跳转个人中心，滚动采集所有在售商品 | — |
+| `manage_item(item_url, action)` | 对指定商品执行 `delist`（下架）或 `delete`（删除） | ⚠️ |
+| `get_page_content()` | 读取当前浏览器页面可见文字（最多 3000 字符） | — |
+| `simulate_farming(duration_minutes)` | 模拟真人随机浏览养号（需 `enable_farming=True`） | — |
+
+> ⚠️ 标注的工具设有 `requires_confirmation=True`，执行前会暂停等待用户确认。
+
+### GenerateImageTools（图像生成）
 
 | 工具 | 说明 |
 |------|------|
-| `check_login_status` | 检查当前账号登录状态 |
-| `take_screenshot` | 截图当前页面 |
-| `goto(url)` | 在浏览器中打开指定 URL |
-| `get_page_content()` | 读取当前页面可见文字（供 AI 分析页面状态） |
-| `search_market(keyword)` | 搜索闲鱼商品，采集标题、价格、链接 |
+| `generate_image(prompt)` | 调用 DashScope 生成图片，返回本地缓存路径 |
 
-### enable_login=True
+### PromptTools（提示词生成）
 
 | 工具 | 说明 |
 |------|------|
-| `login_with_qrcode()` | 打开扫码登录弹窗，引导用户扫码 |
-
-### enable_post_item=True
-
-| 工具 | 说明 |
-|------|------|
-| `fill_item_info(...)` | 在发布页填写图片、描述、分类、价格 |
-| `post_item()` ⚠️ | 提交发布（需用户确认） |
-
-### enable_manager_item=True
-
-| 工具 | 说明 |
-|------|------|
-| `open_profile()` | 打开个人中心 |
-| `get_selling_items()` | 采集所有在售商品列表 |
-| `bump_item(item_url)` | 刷新/置顶商品（每天一次） |
-| `delist_item(item_url)` ⚠️ | 下架商品（变草稿，可重新上架） |
-| `delete_item(item_url)` ⚠️ | 永久删除商品 |
-| `get_item_stats(item_url)` | 查看商品浏览量、收藏数、成交数 |
-
-> ⚠️ 标注的工具 `requires_confirmation=True`，执行前会暂停等待用户确认。
+| `generate_image_prompt(topic)` | 根据技术主题生成科技感英文生图提示词 |
+| `generate_product_description(topic)` | 生成约 500 字第一人称商品描述文案 |
 
 ---
 
@@ -232,18 +228,32 @@ You: 搜索一下 Python 教程，看看竞品价格
 
 ## 测试
 
-```bash
-# 参数验证 + 工具注册测试（无需浏览器，秒级完成）
-python tests/test_tools.py
+每个工具对应一个独立的测试脚本，均位于 `src/tests/` 目录，可直接运行：
 
-# 含浏览器集成测试（启动无头 Chromium，约 15-30 秒）
-RUN_BROWSER_TESTS=true python tests/test_tools.py
+```bash
+# 登录
+python src/tests/test_login.py
+
+# 市场搜索
+python src/tests/test_search_market.py
+
+# 草稿填写
+python src/tests/test_draft_item.py
+
+# 商品发布（内含草稿填写，用户确认后提交）
+python src/tests/test_publish_item.py
+
+# 获取在售商品列表
+python src/tests/test_get_selling_items.py
+
+# 商品管理（下架/删除，含交互确认）
+python src/tests/test_manage_item.py
+
+# 读取页面内容
+python src/tests/test_get_page_content.py
+
+# 模拟养号（默认 1 分钟）
+python src/tests/test_simulate_farming.py
 ```
 
-测试覆盖：
-
-| 分类 | 内容 |
-|------|------|
-| 初始化 | 各 `enable_*` 开关的工具注册正确性 |
-| 参数验证 | 空参数提前返回错误提示 |
-| 浏览器集成 | `goto` / `get_page_content` / `search_market` 真实调用（可选） |
+> 所有测试脚本均使用 `.cache/cookies/xianyu_cookies.json` 作为 Cookie 路径，首次运行会自动触发扫码登录。
