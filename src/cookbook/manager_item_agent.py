@@ -1,10 +1,3 @@
-'''
-Author: tfj
-Date: 2026-03-04
-LastEditors: tfj
-Description: 咸鱼发帖Agent
-Version: Alpha
-'''
 import sys
 import os
 

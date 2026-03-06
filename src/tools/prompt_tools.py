@@ -1,10 +1,3 @@
-'''
-Author: tfj
-Date: 2026-03-04
-LastEditors: tfj
-Description: 提示词生成工具（生图提示词 & 商品描述文案）
-Version: Alpha
-'''
 import os
 import re
 

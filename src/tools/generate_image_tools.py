@@ -1,11 +1,3 @@
-'''
-Author: tfj
-Date: 2026-03-03 22:06:15
-LastEditors: tfj
-LastEditTime: 2026-03-03 23:27:59
-Description: 
-Version: Alpha
-'''
 import json
 import os
 import datetime

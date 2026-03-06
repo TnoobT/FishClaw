@@ -1,10 +1,3 @@
-'''
-Author: tfj
-Date: 2026-03-04
-LastEditors: tfj
-Description: FishClaw 闲鱼助手入口
-Version: Beta
-'''
 import os
 
 from agno.agent import Agent
