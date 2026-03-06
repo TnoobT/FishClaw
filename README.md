@@ -6,7 +6,9 @@
 基于 LLM + Playwright 的闲鱼自动化助手，用自然语言发布商品、管理在售列表。
 
 ---
+
 已封装闲鱼MCP [链接](https://github.com/TnoobT/FishClaw_MCP)
+
 ---
 
 ## 免责声明
